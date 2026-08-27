@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/*
+ * HavenOS design tokens — dark-only, deep-contrast, brass-on-charcoal.
+ * --gold  #C08A1E  data marks only (validated: OKLCH-band, chroma, ≥3:1 on surface)
+ * --brass #C9A96A  branding chrome only (monogram, rules, hover accents) — never data
+ * Status palette is fixed and always paired with a glyph + label, never color alone.
+ */
+@theme {
+  --color-bg: #09090b;
+  --color-surface: #121216;
+  --color-surface-2: #17171c;
+  --color-ink: #f5f4f0;
+  --color-ink-2: #a6a49d;
+  --color-ink-3: #77756e;
+  --color-brass: #c9a96a;
+  --color-brass-bright: #e8cb90;
+  --color-gold: #c08a1e;
+  --color-good: #0ca30c;
+  --color-warn: #fab219;
+  --color-serious: #ec835a;
+  --color-critical: #d03b3b;
+
+  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+:root {
+  color-scheme: dark;
+  --hairline: rgba(245, 244, 240, 0.08);
+  --hairline-strong: rgba(245, 244, 240, 0.16);
+
+  /* Device safe areas — 0 on web, real insets inside the native shell. */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  --tabbar-h: 58px;
+}
+
+html {
+  /* Stop iOS inflating type in landscape. */
+  -webkit-text-size-adjust: 100%;
+  /* No rubber-band past the app chrome. */
+  overscroll-behavior-y: none;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  /* Grey flash on tap is a dead giveaway of a webview. */
+  -webkit-tap-highlight-color: transparent;
+}
+
+::selection {
+  background: color-mix(in oklab, var(--color-brass) 30%, transparent);
+}
+
+/* Native shell only: block text selection + callout on chrome, keep it on content. */
+.native-shell button,
+.native-shell [role="button"],
+.native-shell nav,
+.native-shell header {
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* ── Utilities the design leans on ──────────────────────────────────────── */
+
+.hairline { border: 1px solid var(--hairline); }
+.hairline-t { border-top: 1px solid var(--hairline); }
+.hairline-b { border-bottom: 1px solid var(--hairline); }
+
+/* letter-spaced micro label — the system's smallest voice */
+.microlabel {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+
+.tnum { font-variant-numeric: tabular-nums; }
+
+/* Safe-area helpers */
+.pt-safe { padding-top: var(--safe-top); }
+.pb-safe { padding-bottom: var(--safe-bottom); }
+/* Content above the fixed mobile tab bar */
+.pb-tabbar { padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px); }
+
+/*
+ * Minimum touch target (44×44 per Apple HIG / 48dp per Material) without
+ * forcing the visual size up — the hit area is expanded via a pseudo-element.
+ */
+.touch-target {
+  position: relative;
+}
+.touch-target::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max(100%, 44px);
+  height: max(100%, 44px);
+  transform: translate(-50%, -50%);
+}
+
+/* premium card: charcoal surface, hairline ring, sheen sweep on hover */
+.card {
+  position: relative;
+  background: var(--color-surface);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  overflow: hidden;
+  transition: border-color 240ms ease, transform 240ms ease;
+}
+.card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    115deg,
+    transparent 42%,
+    rgba(232, 203, 144, 0.05) 50%,
+    transparent 58%
+  );
+  transform: translateX(-120%);
+  transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Hover flourishes are for real pointers only — on touch they either never
+   fire or, worse, stick after a tap. */
+@media (hover: hover) and (pointer: fine) {
+  .card:hover { border-color: color-mix(in oklab, var(--color-brass) 38%, transparent); }
+  .card:hover::after { transform: translateX(120%); }
+}
+
+/* Touch devices get a press state instead. */
+@media (hover: none) {
+  .card:active { border-color: color-mix(in oklab, var(--color-brass) 38%, transparent); }
+}
+
+/* striped fill for down/turnover bed cells (texture = secondary encoding) */
+.stripe {
+  background-image: repeating-linear-gradient(
+    45deg,
+    currentColor 0 2px,
+    transparent 2px 5px
+  );
+}
+
+/* horizontal snap rail for mobile column switching */
+.snap-x-rail {
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.snap-x-rail::-webkit-scrollbar { display: none; }
+.snap-item { scroll-snap-align: start; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

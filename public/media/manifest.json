@@ -1,0 +1,21 @@
+{
+  "generator": "higgsfield:cinematic_studio_video_v2",
+  "generated_at": "2026-08-27",
+  "note": "CDN URLs from Higgsfield; mirror to R2/Supabase Storage before production.",
+  "assets": {
+    "onboarding_hero": {
+      "kind": "video/mp4",
+      "aspect": "16:9",
+      "duration_s": 10,
+      "job_id": "d31147c5-1ebc-482f-80e4-5bde2f9b8b3f",
+      "url": "https://d8j0ntlcm91z4.cloudfront.net/user_3AKy1bPsUuvnIcxINgL2fu4pWyl/hf_20260826_182002_d31147c5-1ebc-482f-80e4-5bde2f9b8b3f.mp4"
+    },
+    "virtual_tour_suite": {
+      "kind": "video/mp4",
+      "aspect": "16:9",
+      "duration_s": 12,
+      "job_id": "03b92428-8129-40f1-872d-f37064d93336",
+      "url": "https://d8j0ntlcm91z4.cloudfront.net/user_3AKy1bPsUuvnIcxINgL2fu4pWyl/hf_20260826_182002_03b92428-8129-40f1-872d-f37064d93336.mp4"
+    }
+  }
+}

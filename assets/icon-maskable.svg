@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <!-- Maskable: all art inside the 80% safe zone so Android's mask never clips it. -->
+  <rect width="1024" height="1024" fill="#09090b"/>
+  <rect x="292" y="292" width="440" height="440" fill="none" stroke="#c9a96a" stroke-width="16"/>
+  <g stroke="#f5f4f0" stroke-width="20" stroke-linecap="butt">
+    <path d="M410 383 V641"/>
+    <path d="M381 383 H439"/>
+    <path d="M381 641 H439"/>
+    <path d="M614 383 V641"/>
+    <path d="M585 383 H643"/>
+    <path d="M585 641 H643"/>
+  </g>
+  <path d="M410 494 H614" stroke="#c9a96a" stroke-width="16"/>
+</svg>

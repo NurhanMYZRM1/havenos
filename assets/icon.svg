@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <rect width="1024" height="1024" fill="#09090b"/>
+  <!-- brass frame -->
+  <rect x="212" y="212" width="600" height="600" fill="none" stroke="#c9a96a" stroke-width="20"/>
+  <!-- serif H: stems with flared feet -->
+  <g stroke="#f5f4f0" stroke-width="26" stroke-linecap="butt">
+    <path d="M374 336 V688"/>
+    <path d="M334 336 H414"/>
+    <path d="M334 688 H414"/>
+    <path d="M650 336 V688"/>
+    <path d="M610 336 H690"/>
+    <path d="M610 688 H690"/>
+  </g>
+  <!-- brass crossbar -->
+  <path d="M374 488 H650" stroke="#c9a96a" stroke-width="20"/>
+</svg>
