@@ -1,5 +1,7 @@
 # Shipping HavenOS to the App Store & Play Store
 
+> **Status (desktop release):** HavenOS now ships first as a Windows/macOS desktop app that stores records locally (see [desktop-architecture.md](desktop-architecture.md)). The Capacitor shell below still builds but is **deferred** — it has not been updated for local storage, and no mobile submission work was done in this release.
+
 The web app and the mobile app are **one codebase, two build targets**:
 
 | Target | Command | Output | Runtime |

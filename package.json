@@ -1,19 +1,29 @@
 {
   "name": "haven-os",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
-  "description": "Premium sub-leasing & co-living operations platform (Property → Unit → Bed)",
+  "description": "Property management for Malaysian landlords — desktop app (Windows & macOS) with local storage and optional cloud backup",
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p desktop/tsconfig.json --noEmit",
+    "desktop:dev": "node scripts/desktop.mjs dev",
+    "desktop:build": "node scripts/desktop.mjs build",
+    "desktop:start": "node scripts/desktop.mjs build && electron .",
+    "desktop:package": "node scripts/desktop.mjs build && electron-builder --publish never",
+    "desktop:package:mac": "node scripts/desktop.mjs build && electron-builder --mac --publish never",
+    "desktop:package:win": "node scripts/desktop.mjs build && electron-builder --win --publish never",
+    "test": "node scripts/desktop.mjs main && node --test --test-concurrency=1 \"dist-desktop/desktop/tests/*.test.js\"",
+    "test:cloud-functions": "node --test \"supabase/functions/_shared/*.test.ts\"",
+    "test:e2e": "node scripts/desktop.mjs build && node --test --test-concurrency=1 \"desktop/e2e/*.test.mjs\"",
     "db:types": "supabase gen types typescript --local > lib/database.types.ts",
     "build:mobile": "MOBILE_BUILD=1 next build",
     "cap:sync": "npm run build:mobile && cap sync",
     "cap:ios": "npm run cap:sync && cap open ios",
-    "cap:android": "npm run cap:sync && cap open android"
+    "cap:android": "npm run cap:sync && cap open android",
+    "desktop:package:mac:unsigned": "node scripts/desktop.mjs build && electron-builder --mac --publish never -c.mac.identity=null"
   },
   "dependencies": {
     "@capacitor/android": "^8.5.0",
@@ -38,10 +48,82 @@
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.1.0",
-    "@types/node": "^22.10.0",
+    "@types/node": "^24.13.6",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "playwright-core": "^1.63.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0"
+  },
+  "main": "dist-desktop/desktop/main/main.js",
+  "author": {
+    "name": "HavenOS"
+  },
+  "build": {
+    "appId": "co.havenos.desktop",
+    "productName": "HavenOS",
+    "copyright": "Copyright © 2026 HavenOS",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "package.json",
+      "dist-desktop/**/*",
+      "!dist-desktop/desktop/tests/**",
+      "!dist-desktop/**/*.map",
+      "out/**/*",
+      "!node_modules/**/*"
+    ],
+    "asar": true,
+    "npmRebuild": false,
+    "mac": {
+      "category": "public.app-category.business",
+      "icon": "assets/icon-only.png",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64",
+            "x64"
+          ]
+        }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "desktop/build/entitlements.mac.plist",
+      "entitlementsInherit": "desktop/build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "HavenOS ${version}"
+    },
+    "win": {
+      "icon": "assets/icon-only.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "shortcutName": "HavenOS"
+    }
   }
 }

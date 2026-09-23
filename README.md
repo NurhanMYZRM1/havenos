@@ -1,80 +1,74 @@
 # HavenOS
 
-Premium operations console for high-end sub-leasing and co-living portfolios.
-Inventory is hierarchical — **Property → Unit → Bed** — and leasing happens at
-bed granularity (the co-living primitive).
+Property management for Malaysian landlords, as a desktop app for **Windows
+and macOS**. Records live on the landlord's own computer and work offline, with
+no account needed. **Cloud backup** is an optional paid add-on.
 
-Ships as **one codebase, two targets**: a Vercel web app and a native
-iOS/Android app via Capacitor.
-
-## Stack
-
-- **Next.js 15** (App Router, TypeScript, Tailwind v4) → Vercel (`sin1`)
-- **Capacitor 8** native shell → App Store / Play Store
-- **Supabase** Postgres with RLS — [supabase/migrations/0001_core.sql](supabase/migrations/0001_core.sql)
-- **Cloudflare** DNS for the app + per-tenant vanity domains — [docs/cloudflare-custom-domains.md](docs/cloudflare-custom-domains.md)
-- **framer-motion** micro-interactions; brand tokens in [app/globals.css](app/globals.css)
-- **Higgsfield Cinema Studio** renders for onboarding — [public/media/manifest.json](public/media/manifest.json)
+- **Properties:** Malaysian addresses (postcode, city, state or federal
+  territory), each unit let as a **whole unit, by room, or by bed**, and
+  photos with a chosen cover.
+- **Tenants & tenancies:**
+  - Contact details (+60 numbers) and assignment to a unit, room or bed.
+  - Overlap protection: a whole-unit tenancy can't overlap a tenancy on its
+    rooms or beds.
+  - Active / upcoming / ending-soon / ended views.
+  - Move-in and move-out, with deposit refunds and deductions.
+  - Documents.
+- **Rent:**
+  - Monthly charges from an editable rent schedule; they're never duplicated.
+  - Manual payments (bank transfer, DuitNow, cash…), partial payments,
+    balances and overdue amounts.
+  - Numbered receipts: print or save as PDF.
+  - Deposits kept apart from income; CSV export. Amounts are integer sen,
+    shown as RM.
+- **Maintenance** (formerly Work Orders):
+  - Requests tied to a property and optionally a unit, room or bed; priority,
+    status, due date and contractor.
+  - Estimated and actual costs, photos and files, notes, and a full change
+    history.
+  - List and board views with filters.
+- **Dashboard:** occupancy measured by each unit's arrangement; rent due,
+  collected and overdue; tenancies ending; move-ins and move-outs; maintenance
+  summary — all calculated from stored records.
+- **Backup & restore:** one checked file containing the database and all
+  attachments, with a safety copy made before every restore. Plus a separate
+  **sample workspace** for trying the app.
 
 ## Quick start
 
 ```bash
 npm install
-cp .env.example .env.local   # Supabase keys (demo data renders without them)
-npm run dev
+npm run desktop:dev
 ```
 
-Routes: `/dashboard` (property hub), `/dashboard/work-orders`, `/onboarding`,
-`/t/<host>` (tenant custom domains, reached via `middleware.ts` rewrites).
+Other commands (tests, packaging, signing) are in
+[docs/desktop-release.md](docs/desktop-release.md).
 
-## Build targets
+## Documentation
 
-| Target | Command | Output | Notes |
-|---|---|---|---|
-| Web | `npm run build` | `.next/` | SSR, middleware, tenant custom domains |
-| Mobile | `npm run build:mobile` | `out/` | Static export for the Capacitor shell |
+- [docs/desktop-architecture.md](docs/desktop-architecture.md) — why Electron,
+  process model and security, local storage and integrity, backup format,
+  domain rules, the short-stay/Airbnb path, i18n.
+- [docs/desktop-release.md](docs/desktop-release.md) — dev, test, package,
+  sign, notarise, install.
+- [docs/cloud-backup.md](docs/cloud-backup.md) — the optional paid cloud
+  backup: design, billing provider choice, owner setup checklist, what is
+  verified.
 
-Routes named `page.web.tsx` are registered **only** in the web build — that
-keeps the dynamic tenant route out of the static export without forcing
-`dynamicParams: false` onto the web build.
+## Layout
 
-## Mobile
+| Path | What |
+|---|---|
+| `app/`, `components/` | Next.js UI (static export in the desktop app) |
+| `lib/domain/` | Shared rules: money (sen), KL dates, phones, rent, overlaps, validation |
+| `lib/api/contract.ts` | Typed contract between the UI and the desktop process |
+| `lib/i18n/` | UI text catalogue (English; Bahasa Malaysia can be added) |
+| `desktop/main`, `desktop/preload` | Electron main process and the narrow bridge |
+| `desktop/core/` | SQLite schema & migrations, services, attachments, backup, cloud client |
+| `desktop/tests/`, `desktop/e2e/` | Node test-runner suites and Playwright-driven app tests |
+| `supabase/functions/`, `supabase/migrations/0002_*` | Optional cloud-backup service |
 
-```bash
-npm run cap:ios       # build + sync + open Xcode
-```
-
-```bash
-npm run cap:android   # build + sync + open Android Studio
-```
-
-Full submission guide — including the **App Store Guideline 4.2** risk and how
-this app mitigates it — is in
-[docs/mobile-deployment.md](docs/mobile-deployment.md).
-
-Native capabilities live in [lib/native.ts](lib/native.ts) and all degrade
-gracefully on web: camera capture, push notifications, haptics, offline cache,
-network awareness.
-
-Icons and splash screens regenerate from [assets/](assets):
-
-```bash
-npm i -D sharp && node scripts/gen-icons.mjs
-```
-
-## Database
-
-```bash
-supabase link --project-ref <ref>
-supabase db push
-psql $DB_URL -f supabase/seed.sql
-npm run db:types
-```
-
-## Deploy (web)
-
-```bash
-vercel link && vercel --prod
-```
-
-Then point Cloudflare DNS at `cname.vercel-dns.com` per the routing doc.
+The earlier web and Capacitor targets still build (`npm run build`,
+`npm run build:mobile`). The web build shows that records are kept in the
+desktop app, and mobile work is deferred
+([docs/mobile-deployment.md](docs/mobile-deployment.md)).

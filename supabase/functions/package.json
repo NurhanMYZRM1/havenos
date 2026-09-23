@@ -1,0 +1,5 @@
+{
+  "//": "Edge functions are ES modules (Deno). This lets Node run the _shared tests without a warning.",
+  "type": "module",
+  "private": true
+}

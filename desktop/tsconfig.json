@@ -1,0 +1,29 @@
+{
+  // Electron main process, preload, the Node-only core, and its tests.
+  // Compiled to CommonJS in dist-desktop/ (mirroring the repo layout, since
+  // the core shares lib/domain, lib/api/contract and lib/i18n with the UI).
+  "compilerOptions": {
+    "target": "ES2023",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "lib": ["ES2023"],
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "rootDir": "..",
+    "outDir": "../dist-desktop",
+    "sourceMap": true,
+    "noUnusedLocals": true
+  },
+  "include": [
+    "./**/*.ts",
+    "../lib/domain/**/*.ts",
+    "../lib/api/contract.ts",
+    "../lib/i18n/**/*.ts",
+    "../supabase/functions/_shared/protocol.ts"
+  ],
+  "exclude": ["./e2e/**"]
+}

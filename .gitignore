@@ -14,3 +14,10 @@ next-env.d.ts
 
 # misc
 .DS_Store
+
+# desktop
+dist-desktop/
+release/
+
+# e2e artefacts
+desktop/e2e/screenshots/

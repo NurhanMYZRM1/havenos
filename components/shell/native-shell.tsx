@@ -5,17 +5,17 @@ import { AnimatePresence, motion } from "framer-motion";
 import { initNativeShell, isNative, watchNetwork } from "@/lib/native";
 
 /**
- * Boots native chrome (status bar, splash dismissal) and shows a persistent
- * offline banner. Renders nothing on the web beyond the banner.
+ * Boots native chrome (status bar, splash dismissal) and shows an offline
+ * banner — in the Capacitor mobile shell only. The desktop app keeps its
+ * records locally, so being offline changes nothing there and no banner shows.
  */
 export function NativeShell() {
   const [online, setOnline] = useState(true);
 
   useEffect(() => {
-    if (isNative()) {
-      document.documentElement.classList.add("native-shell");
-      void initNativeShell();
-    }
+    if (!isNative()) return;
+    document.documentElement.classList.add("native-shell");
+    void initNativeShell();
     let dispose: (() => void) | undefined;
     void watchNetwork(setOnline).then((fn) => {
       dispose = fn;

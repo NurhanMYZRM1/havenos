@@ -1,48 +1,49 @@
 @import "tailwindcss";
 
 /*
- * HavenOS design tokens — dark-only, deep-contrast, brass-on-charcoal.
- * --gold  #C08A1E  data marks only (validated: OKLCH-band, chroma, ≥3:1 on surface)
- * --brass #C9A96A  branding chrome only (monogram, rules, hover accents) — never data
- * Status palette is fixed and always paired with a glyph + label, never color alone.
+ * HavenOS design tokens — deep charcoal with brass accents.
+ * Readability pass for an all-day desktop tool: larger base type, higher
+ * contrast secondary text (ink-2/ink-3 both ≥ 4.5:1 on surfaces), visible
+ * focus rings, and status colours that always travel with a glyph + label.
+ *
+ * --brass       branding chrome (monogram, rules, active nav, focus)
+ * --gold        data marks (meters, progress)
  */
 @theme {
-  --color-bg: #09090b;
-  --color-surface: #121216;
-  --color-surface-2: #17171c;
+  --color-bg: #0b0b0d;
+  --color-surface: #141418;
+  --color-surface-2: #1b1b21;
+  --color-surface-3: #23232a;
   --color-ink: #f5f4f0;
-  --color-ink-2: #a6a49d;
-  --color-ink-3: #77756e;
+  --color-ink-2: #b9b6ae;
+  --color-ink-3: #8f8c84;
   --color-brass: #c9a96a;
   --color-brass-bright: #e8cb90;
-  --color-gold: #c08a1e;
-  --color-good: #0ca30c;
-  --color-warn: #fab219;
+  --color-gold: #c99a2e;
+  --color-good: #3fb96b;
+  --color-info: #74a9e8;
+  --color-warn: #f2b33d;
   --color-serious: #ec835a;
-  --color-critical: #d03b3b;
+  --color-critical: #e5534b;
 
-  --font-display: "Fraunces", Georgia, "Times New Roman", serif;
-  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-display: var(--font-fraunces), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
 :root {
   color-scheme: dark;
-  --hairline: rgba(245, 244, 240, 0.08);
-  --hairline-strong: rgba(245, 244, 240, 0.16);
+  --hairline: rgba(245, 244, 240, 0.09);
+  --hairline-strong: rgba(245, 244, 240, 0.18);
+  --focus: var(--color-brass-bright);
 
-  /* Device safe areas — 0 on web, real insets inside the native shell. */
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
-  --safe-left: env(safe-area-inset-left, 0px);
-  --safe-right: env(safe-area-inset-right, 0px);
-
   --tabbar-h: 58px;
+  --sidebar-w: 244px;
 }
 
 html {
-  /* Stop iOS inflating type in landscape. */
   -webkit-text-size-adjust: 100%;
-  /* No rubber-band past the app chrome. */
   overscroll-behavior-y: none;
 }
 
@@ -50,123 +51,130 @@ body {
   background: var(--color-bg);
   color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
-  /* Grey flash on tap is a dead giveaway of a webview. */
-  -webkit-tap-highlight-color: transparent;
 }
 
 ::selection {
-  background: color-mix(in oklab, var(--color-brass) 30%, transparent);
+  background: color-mix(in oklab, var(--color-brass) 35%, transparent);
 }
 
-/* Native shell only: block text selection + callout on chrome, keep it on content. */
+/* One clear focus style everywhere, keyboard only. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Custom radio cards hide the native input; show its focus on the card. */
+label:has(> input.sr-only:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* macOS: the window's title bar is hidden; this strip drags the window. */
+.drag-region {
+  -webkit-app-region: drag;
+}
+.drag-region button,
+.drag-region a,
+.drag-region input {
+  -webkit-app-region: no-drag;
+}
+
+/* Native shell (Capacitor) only. */
 .native-shell button,
-.native-shell [role="button"],
 .native-shell nav,
 .native-shell header {
   -webkit-user-select: none;
   user-select: none;
-  -webkit-touch-callout: none;
 }
 
-/* ── Utilities the design leans on ──────────────────────────────────────── */
+/* Component classes live in a layer so Tailwind utilities (pl-10, !border-…) can override them. */
+@layer components {
+/* ── Utilities ──────────────────────────────────────────────────────────── */
 
 .hairline { border: 1px solid var(--hairline); }
 .hairline-t { border-top: 1px solid var(--hairline); }
 .hairline-b { border-bottom: 1px solid var(--hairline); }
 
-/* letter-spaced micro label — the system's smallest voice */
 .microlabel {
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--color-ink-3);
 }
 
 .tnum { font-variant-numeric: tabular-nums; }
 
-/* Safe-area helpers */
-.pt-safe { padding-top: var(--safe-top); }
-.pb-safe { padding-bottom: var(--safe-bottom); }
-/* Content above the fixed mobile tab bar */
 .pb-tabbar { padding-bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px); }
 
-/*
- * Minimum touch target (44×44 per Apple HIG / 48dp per Material) without
- * forcing the visual size up — the hit area is expanded via a pseudo-element.
- */
-.touch-target {
-  position: relative;
-}
-.touch-target::before {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: max(100%, 44px);
-  height: max(100%, 44px);
-  transform: translate(-50%, -50%);
-}
-
-/* premium card: charcoal surface, hairline ring, sheen sweep on hover */
 .card {
   position: relative;
   background: var(--color-surface);
   border: 1px solid var(--hairline);
-  border-radius: 10px;
-  overflow: hidden;
-  transition: border-color 240ms ease, transform 240ms ease;
+  border-radius: 12px;
 }
-.card::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(
-    115deg,
-    transparent 42%,
-    rgba(232, 203, 144, 0.05) 50%,
-    transparent 58%
-  );
-  transform: translateX(-120%);
-  transition: transform 700ms cubic-bezier(0.22, 1, 0.36, 1);
-}
-
-/* Hover flourishes are for real pointers only — on touch they either never
-   fire or, worse, stick after a tap. */
+a.card, button.card { transition: border-color 200ms ease; }
 @media (hover: hover) and (pointer: fine) {
-  .card:hover { border-color: color-mix(in oklab, var(--color-brass) 38%, transparent); }
-  .card:hover::after { transform: translateX(120%); }
+  a.card:hover, button.card:hover { border-color: color-mix(in oklab, var(--color-brass) 40%, transparent); }
 }
 
-/* Touch devices get a press state instead. */
-@media (hover: none) {
-  .card:active { border-color: color-mix(in oklab, var(--color-brass) 38%, transparent); }
-}
-
-/* striped fill for down/turnover bed cells (texture = secondary encoding) */
 .stripe {
-  background-image: repeating-linear-gradient(
-    45deg,
-    currentColor 0 2px,
-    transparent 2px 5px
-  );
+  background-image: repeating-linear-gradient(45deg, currentColor 0 2px, transparent 2px 5px);
 }
 
-/* horizontal snap rail for mobile column switching */
-.snap-x-rail {
-  scroll-snap-type: x mandatory;
-  -webkit-overflow-scrolling: touch;
-  scrollbar-width: none;
+/* Form controls */
+.control {
+  width: 100%;
+  min-height: 40px;
+  border-radius: 8px;
+  background: var(--color-surface-2);
+  border: 1px solid var(--hairline-strong);
+  color: var(--color-ink);
+  padding: 8px 12px;
+  font-size: 14px;
+  transition: border-color 150ms ease, background-color 150ms ease;
 }
-.snap-x-rail::-webkit-scrollbar { display: none; }
-.snap-item { scroll-snap-align: start; }
+.control::placeholder { color: var(--color-ink-3); }
+.control:hover { border-color: rgba(245, 244, 240, 0.28); }
+.control:focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; border-color: transparent; }
+.control[aria-invalid="true"] { border-color: var(--color-critical); }
+.control:disabled { opacity: 0.55; cursor: not-allowed; }
+select.control { appearance: none; padding-right: 36px; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23b9b6ae' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 12px center; }
+textarea.control { min-height: 88px; resize: vertical; line-height: 1.5; }
+input[type="date"].control::-webkit-calendar-picker-indicator { filter: invert(0.8); cursor: pointer; }
+input[type="checkbox"].check { width: 18px; height: 18px; accent-color: var(--color-brass); }
+
+/* Tables */
+.table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.table th { text-align: left; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-ink-3); padding: 10px 12px; border-bottom: 1px solid var(--hairline); white-space: nowrap; }
+.table td { padding: 11px 12px; border-bottom: 1px solid var(--hairline); vertical-align: middle; }
+.table tbody tr:last-child td { border-bottom: 0; }
+.table tbody tr.row-link { cursor: pointer; }
+.table tbody tr.row-link:hover td { background: rgba(245, 244, 240, 0.025); }
+
+dialog.modal { background: transparent; padding: 0; border: 0; max-width: none; max-height: none; color: inherit; }
+dialog.modal::backdrop { background: rgba(0, 0, 0, 0.62); }
+.table td.tnum, .table th.tnum { white-space: nowrap; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* ── Print (receipts) ───────────────────────────────────────────────────── */
+@media print {
+  :root { color-scheme: light; }
+  body { background: #fff !important; color: #111 !important; }
+  .no-print { display: none !important; }
 }
