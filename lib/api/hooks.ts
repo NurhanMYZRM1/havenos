@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { MessageKey } from "../i18n";
-import { api, ApiError, errorMessage, notifyChanged, onChanged } from "./client";
-import type { ApiMethod, ApiParams, ApiResult } from "./contract";
+import { api, ApiError, errorMessage, notifyChanged, onChanged, onEvent } from "./client";
+import type { ApiMethod, ApiParams, ApiResult, ErrorCode } from "./contract";
 
 export interface Query<T> {
   data: T | undefined;
@@ -61,6 +61,8 @@ export interface Mutation<M extends ApiMethod> {
   pending: boolean;
   error: string | null;
   fields: Record<string, MessageKey>;
+  /** Error code of the last failure (e.g. "CONFLICT"), null otherwise. */
+  code: ErrorCode | null;
   reset: () => void;
 }
 
@@ -73,12 +75,14 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, MessageKey>>({});
+  const [code, setCode] = useState<ErrorCode | null>(null);
 
   const run = useCallback(
     async (params: ApiParams<M>) => {
       setPending(true);
       setError(null);
       setFields({});
+      setCode(null);
       try {
         const call = api as unknown as (m: M, p: unknown) => Promise<ApiResult<M>>;
         const result = await call(method, params);
@@ -87,6 +91,7 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
       } catch (err) {
         setError(errorMessage(err));
         if (err instanceof ApiError && err.fields) setFields(err.fields);
+        setCode(err instanceof ApiError ? err.code : "INTERNAL");
         return undefined;
       } finally {
         setPending(false);
@@ -98,7 +103,36 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
   const reset = useCallback(() => {
     setError(null);
     setFields({});
+    setCode(null);
   }, []);
 
-  return { run, pending, error, fields, reset };
+  return { run, pending, error, fields, code, reset };
+}
+
+// ── Calendar sync activity ────────────────────────────────────────────────
+// Main pushes "channel-sync" with the connections being read right now. One
+// shared subscription keeps the latest value for every component.
+
+const NO_SYNC: string[] = [];
+let syncRunning: string[] = NO_SYNC;
+let syncSubscribed = false;
+const syncListeners = new Set<() => void>();
+
+function subscribeSync(listener: () => void) {
+  syncListeners.add(listener);
+  if (!syncSubscribed && typeof window !== "undefined") {
+    syncSubscribed = true;
+    onEvent("channel-sync", (payload) => {
+      syncRunning = Array.isArray(payload?.running) && payload.running.length ? [...payload.running] : NO_SYNC;
+      syncListeners.forEach((l) => l());
+    });
+  }
+  return () => {
+    syncListeners.delete(listener);
+  };
+}
+
+/** Ids of the calendar connections HavenOS is reading right now (empty when idle). */
+export function useChannelSync(): string[] {
+  return useSyncExternalStore(subscribeSync, () => syncRunning, () => NO_SYNC);
 }

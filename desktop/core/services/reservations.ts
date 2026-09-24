@@ -244,3 +244,70 @@ export function createReservation(core: Core, input: ReservationInput): string {
     return id;
   });
 }
+
+// ── Channel sync helpers (appended by the calendar sync package) ───────────
+
+/**
+ * A cancelled synced booking is listed by its channel again: make it a
+ * confirmed stay on `spaceId` with the channel's dates. Throws CONFLICT if
+ * those nights are taken by anything else.
+ */
+export function reinstateReservation(
+  core: Core,
+  id: string,
+  input: { spaceId: string; checkIn: IsoDate; checkOut: IsoDate; connectionId: string | null },
+  source: ReservationSource,
+) {
+  assertStayDates(input.checkIn, input.checkOut);
+  core.db.tx(() => {
+    const row = getReservationRow(core, id);
+    if (row.status !== "cancelled") return;
+    const space = core.db.get<{ property_id: string }>("SELECT property_id FROM spaces WHERE id = ? AND archived_at IS NULL", [input.spaceId]);
+    if (!space) throw notFound();
+    const [first, last] = stayRange(input.checkIn, input.checkOut);
+    const conflict = findConflict(core, input.spaceId, first, last, { excludeReservationId: id });
+    if (conflict) throw conflictError(core, conflict);
+    const now = core.nowIso();
+    core.db.run(
+      `UPDATE reservations SET status = 'confirmed', cancelled_at = NULL, cancel_reason = '', missing_since = NULL, last_seen_at = ?,
+         space_id = ?, property_id = ?, connection_id = ?, check_in = ?, check_out = ?, updated_at = ? WHERE id = ?`,
+      [now, input.spaceId, space.property_id, input.connectionId, input.checkIn, input.checkOut, now, id],
+    );
+    core.db.run("UPDATE turnovers SET space_id = ?, property_id = ?, updated_at = ? WHERE reservation_id = ?", [input.spaceId, space.property_id, now, id]);
+    const changes: Change[] = [{ field: "status", from: "cancelled", to: "confirmed" }];
+    if (row.check_in !== input.checkIn) changes.push({ field: "checkIn", from: row.check_in, to: input.checkIn });
+    if (row.check_out !== input.checkOut) changes.push({ field: "checkOut", from: row.check_out, to: input.checkOut });
+    if (row.space_id !== input.spaceId) changes.push({ field: "spaceId", from: row.space_id, to: input.spaceId });
+    addReservationEvent(core, id, "reappeared", source, changes);
+    syncTurnover(core, id);
+  });
+}
+
+/** A booking entered by hand (or imported from CSV, or left by a removed connection) is now kept in step by a connection's feed. */
+export function linkReservationToConnection(core: Core, id: string, connectionId: string, source: ReservationSource) {
+  const row = getReservationRow(core, id);
+  if (row.connection_id === connectionId) return;
+  core.db.run("UPDATE reservations SET connection_id = ?, updated_at = ? WHERE id = ?", [connectionId, core.nowIso(), id]);
+  addReservationEvent(core, id, "updated", source, [{ field: "connectionId", from: row.connection_id, to: connectionId }]);
+}
+
+/** Move a stay to another space (a connection was re-mapped). Throws CONFLICT if the nights are taken there. */
+export function moveReservationSpace(core: Core, id: string, spaceId: string, source: ReservationSource) {
+  core.db.tx(() => {
+    const row = getReservationRow(core, id);
+    if (row.space_id === spaceId) return;
+    const space = core.db.get<{ property_id: string }>("SELECT property_id FROM spaces WHERE id = ? AND archived_at IS NULL", [spaceId]);
+    if (!space) throw notFound();
+    if (row.status !== "cancelled") {
+      const [first, last] = stayRange(row.check_in, row.check_out);
+      const conflict = findConflict(core, spaceId, first, last, { excludeReservationId: id });
+      if (conflict) throw conflictError(core, conflict);
+    }
+    const now = core.nowIso();
+    core.db.run("UPDATE reservations SET space_id = ?, property_id = ?, updated_at = ? WHERE id = ?", [spaceId, space.property_id, now, id]);
+    core.db.run("UPDATE turnovers SET space_id = ?, property_id = ?, updated_at = ? WHERE reservation_id = ?", [spaceId, space.property_id, now, id]);
+    core.db.run("UPDATE stay_ledger SET space_id = ?, property_id = ?, updated_at = ? WHERE reservation_id = ?", [spaceId, space.property_id, now, id]);
+    addReservationEvent(core, id, "updated", source, [{ field: "spaceId", from: row.space_id, to: spaceId }]);
+    syncTurnover(core, id);
+  });
+}
