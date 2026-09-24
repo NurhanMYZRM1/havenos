@@ -8,12 +8,16 @@ import type { NextConfig } from "next";
 //                                   Electron app from app://havenos (no server).
 //   `MOBILE_BUILD=1 next build`   → static bundle in ./out for the Capacitor shell.
 //
-// Routes suffixed `.web.tsx` are registered only in the web build, which keeps
-// the dynamic tenant route out of the static exports.
+// Files suffixed `.web.tsx` / `.web.ts` are registered only in the web build:
+// that keeps the dynamic tenant route and the custom-domain middleware
+// (`middleware.web.ts`) out of the static desktop/mobile exports.
 const isStatic = process.env.MOBILE_BUILD === "1" || process.env.DESKTOP_BUILD === "1";
 
 const nextConfig: NextConfig = {
-  pageExtensions: isStatic ? ["tsx", "ts"] : ["web.tsx", "tsx", "ts"],
+  // Pin the project root (the build always runs from here) so a parent
+  // folder's lockfile — e.g. when working in a git worktree — isn't mistaken for it.
+  outputFileTracingRoot: process.cwd(),
+  pageExtensions: isStatic ? ["tsx", "ts"] : ["web.tsx", "web.ts", "tsx", "ts"],
 
   ...(isStatic
     ? {

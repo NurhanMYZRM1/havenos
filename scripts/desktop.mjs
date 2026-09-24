@@ -5,7 +5,8 @@
  *   node scripts/desktop.mjs main      compile Electron main/preload/core → dist-desktop/
  *   node scripts/desktop.mjs renderer  static Next.js export → out/
  *   node scripts/desktop.mjs build     both
- *   node scripts/desktop.mjs dev       next dev + Electron pointed at it
+ *   node scripts/desktop.mjs dev       next dev (first free port from 3000, or $PORT)
+ *                                      + Electron pointed at it
  *
  * Cloud backup endpoints are baked in at build time from
  * HAVENOS_CLOUD_URL and HAVENOS_CLOUD_ANON_KEY (public values only — the
@@ -15,6 +16,7 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
+import net from "node:net";
 import path from "node:path";
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
@@ -56,14 +58,45 @@ async function buildRenderer() {
   await run(process.execPath, [bin.next, "build"], { DESKTOP_BUILD: "1" });
 }
 
-function waitForServer(url, timeoutMs = 120_000) {
+/** True when nothing is listening on `port` (checked the way Next binds: all interfaces). */
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const probe = net.createServer();
+    probe.once("error", () => resolve(false));
+    probe.once("listening", () => probe.close(() => resolve(true)));
+    probe.listen(port);
+  });
+}
+
+/** PORT is honoured exactly; otherwise the first free port from 3000 up. */
+async function choosePort() {
+  if (process.env.PORT) {
+    const port = Number(process.env.PORT);
+    if (!(await isPortFree(port))) throw new Error(`Port ${port} is already in use. Stop whatever is using it, or unset PORT to pick a free one.`);
+    return port;
+  }
+  for (let port = 3000; port < 3050; port++) if (await isPortFree(port)) return port;
+  throw new Error("No free port between 3000 and 3049.");
+}
+
+/**
+ * Wait until OUR dev server answers. Fails fast if that process exits, so
+ * Electron can never end up attached to some other app on the same port.
+ */
+function waitForServer(url, child, timeoutMs = 120_000) {
   const started = Date.now();
   return new Promise((resolve, reject) => {
+    let exited = false;
+    child.once("exit", (code) => {
+      exited = true;
+      reject(new Error(`The Next.js dev server stopped before it was ready (exit code ${code}).`));
+    });
     const attempt = () => {
+      if (exited) return;
       http
         .get(url, (res) => {
           res.resume();
-          resolve();
+          if (!exited) resolve();
         })
         .on("error", () => {
           if (Date.now() - started > timeoutMs) reject(new Error(`Timed out waiting for ${url}`));
@@ -76,24 +109,43 @@ function waitForServer(url, timeoutMs = 120_000) {
 
 async function dev() {
   await buildMain();
-  const port = process.env.PORT ?? "3000";
+  const port = await choosePort();
   const url = `http://localhost:${port}`;
-  const next = spawn(process.execPath, [bin.next, "dev", "-p", port], { cwd: root, stdio: "inherit", env: { ...process.env, DESKTOP_BUILD: "1" } });
+  const children = [];
+  const stop = () => {
+    for (const child of children) if (child.exitCode === null) child.kill();
+  };
+  process.on("SIGINT", () => {
+    stop();
+    process.exit(130);
+  });
+  process.on("SIGTERM", () => {
+    stop();
+    process.exit(143);
+  });
+
+  const next = spawn(process.execPath, [bin.next, "dev", "-p", String(port)], { cwd: root, stdio: "inherit", env: { ...process.env, DESKTOP_BUILD: "1" } });
   const tscWatch = spawn(process.execPath, [bin.tsc, "-p", "desktop/tsconfig.json", "--watch", "--preserveWatchOutput"], { cwd: root, stdio: "inherit" });
-  await waitForServer(`${url}/dashboard`);
+  children.push(next, tscWatch);
+  try {
+    await waitForServer(`${url}/dashboard`, next);
+  } catch (err) {
+    stop();
+    throw err;
+  }
+  console.log(`Opening HavenOS against ${url}`);
   const electronPath = require("electron");
   const app = spawn(electronPath, ["."], { cwd: root, stdio: "inherit", env: { ...process.env, HAVENOS_DEV_SERVER_URL: url } });
-  const stop = () => {
-    next.kill();
-    tscWatch.kill();
-    app.kill();
-  };
+  children.push(app);
   app.on("exit", () => {
     stop();
     process.exit(0);
   });
-  process.on("SIGINT", stop);
-  process.on("SIGTERM", stop);
+  next.on("exit", () => {
+    console.error("The Next.js dev server stopped; closing HavenOS.");
+    stop();
+    process.exit(1);
+  });
 }
 
 const command = process.argv[2];
