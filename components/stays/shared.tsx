@@ -144,8 +144,8 @@ export function SyncIndicator() {
 // ── Pickers ────────────────────────────────────────────────────────────────
 
 /** Lettable spaces across every property, grouped by property. */
-export function useSpaceOptions() {
-  return useApi("spaces.options", { propertyId: null, startDate: null, endDate: null, excludeTenancyId: null });
+export function useSpaceOptions(enabled = true) {
+  return useApi("spaces.options", { propertyId: null, startDate: null, endDate: null, excludeTenancyId: null }, { enabled });
 }
 
 export function SpaceSelect({

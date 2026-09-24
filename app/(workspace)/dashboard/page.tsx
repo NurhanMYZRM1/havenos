@@ -7,6 +7,7 @@ import { OccupancyMeter } from "@/components/dashboard/occupancy-meter";
 import { PropertyCover } from "@/components/files";
 import { useToday } from "@/components/forms";
 import { SkylineIllustration } from "@/components/illustrations";
+import { ShortStaysTodayCard } from "@/components/stays/dashboard-card";
 import { useActions } from "@/components/shell/app-shell";
 import { TenancyLink } from "@/components/tenancies/tenancy-link";
 import { Button, LinkButton } from "@/components/ui/button";
@@ -177,6 +178,7 @@ export default function DashboardPage() {
         <QuickActions />
 
         <div className="grid gap-4 xl:grid-cols-2">
+          <ShortStaysTodayCard today={d.today} />
           {d.needsAttention.length > 0 && (
             <Card title={t("dashboard.attention")} className="xl:col-span-2">
               <ul className="-mx-3 -my-2">

@@ -294,6 +294,8 @@ export const shortStaysCopy = {
       howBlock: "HavenOS can't block dates on Airbnb. Nights taken in HavenOS (tenancies, blocks, direct bookings) are listed under “Dates to block on Airbnb” for you to block there by hand.",
       howMoney: "For money, import Airbnb's earnings CSV under Short stays → Performance.",
       notFound: "This connection can't be found. It may have been removed.",
+      sampleNote: "You're in the sample workspace. Its demo connections have no real calendar link, so they show “Link missing”, and new calendars can't be linked here. Try it in your own records.",
+      sampleLeave: "Back to my records",
     },
 
     settingsCard: {
@@ -725,7 +727,7 @@ export const shortStaysCopy = {
       legendImported: "Imported — from your Airbnb earnings CSV.",
       legendEntered: "Entered — typed by you in HavenOS.",
       netHelp: "Estimated net = booking value − channel fees − taxes − expenses. Expenses include turnover costs and completed maintenance on short-stay spaces. An estimate, not accounting.",
-      occupancyHelp: "Occupancy is booked nights ÷ nights in the period, shown for single spaces only.",
+      occupancyHelp: "Occupancy is booked nights ÷ nights available in the period (nights you blocked yourself don't count as available), shown for single spaces only.",
       noPricing: "HavenOS has no market data and doesn't suggest prices.",
       withoutMoney: "{n} stays in this period have no booking value. Stays synced from a calendar carry dates only — import your Airbnb earnings CSV (Earnings → Transaction history → Export CSV) to add their money.",
       empty: "No short-stay activity in these months.",
@@ -769,6 +771,7 @@ export const shortStaysCopy = {
       resultCreated: "{n} reservations created",
       resultUpdated: "{n} reservations updated",
       resultLedger: "{n} money entries added",
+      upcomingNote: "Upcoming payouts are added once Airbnb pays them — import again later.",
       conflictsTitle: "Stays not created because their nights clash",
       conflictsHelp: "Their money was kept. Sort out the clash, then import the file again — rows already imported are skipped.",
       done: "Done",

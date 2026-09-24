@@ -4,7 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
 import { CloudPanel } from "@/components/settings/cloud-panel";
 import { RestoreConfirm } from "@/components/settings/restore-confirm";
-import { Button } from "@/components/ui/button";
+import { Button, LinkButton } from "@/components/ui/button";
 import { Field, FormError, Select, TextArea, TextInput } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icons";
 import { Card, DetailList, LoadError, Loading, Notice, PageHeader, Tabs } from "@/components/ui/layout";
@@ -15,7 +15,7 @@ import { useApi, useMutation } from "@/lib/api/hooks";
 import { EXPORT_DATASETS, type ExportDataset } from "@/lib/domain/enums";
 import { formatBytes, formatTimestamp } from "@/lib/domain/format";
 import { formatPhone } from "@/lib/domain/phone";
-import { t, type MessageKey } from "@/lib/i18n";
+import { plural, t, type MessageKey } from "@/lib/i18n";
 
 type Tab = "storage" | "cloud" | "business" | "sample" | "about";
 
@@ -278,6 +278,30 @@ function Sample() {
   );
 }
 
+/** Short-stay calendars: states the method honestly and links to the connections page. */
+function ShortStayChannelsCard() {
+  const channels = useApi("channels.list", undefined);
+  const list = channels.data ?? [];
+  const attention = list.filter((c) => c.health === "error" || c.health === "stale" || c.health === "feed_link_missing" || c.counts.conflicts > 0 || c.counts.missing > 0).length;
+  return (
+    <Card title={t("settings.integrations")}>
+      <p className="text-[14px] font-medium">{t("shortStays.settingsCard.title")}</p>
+      <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-2">{t("shortStays.settingsCard.body")}</p>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <LinkButton href="/settings/channels/" size="sm" variant="primary" icon={<Icon name="calendar" size={14} />}>
+          {t("shortStays.settingsCard.open")}
+        </LinkButton>
+        {channels.data && (
+          <span className="text-[13px] text-ink-2">
+            {list.length === 0 ? t("shortStays.settingsCard.none") : plural(list.length, "shortStays.settingsCard.countOne", "shortStays.settingsCard.countMany")}
+            {attention > 0 && <span className="ml-2 font-medium text-warn">{t("shortStays.settingsCard.attention", { n: attention })}</span>}
+          </span>
+        )}
+      </div>
+    </Card>
+  );
+}
+
 function About() {
   const info = useApi("app.info", undefined);
   if (!info.data) return <Loading />;
@@ -293,10 +317,7 @@ function About() {
           ]}
         />
       </Card>
-      <Card title={t("settings.integrations")}>
-        <p className="text-[14px] font-medium">{t("settings.shortStays")}</p>
-        <p className="mt-1.5 text-[13.5px] leading-relaxed text-ink-2">{t("settings.shortStaysHelp")}</p>
-      </Card>
+      <ShortStayChannelsCard />
     </div>
   );
 }

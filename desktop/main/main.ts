@@ -6,9 +6,11 @@ import type { CloudConfig } from "../core/cloud/api";
 import { CloudService } from "../core/cloud/service";
 import { toErrorShape } from "../core/errors";
 import { createHandlers, type Handlers, type Platform } from "../core/handlers";
-import { MemorySecretStore, type ChannelSyncControl } from "../core/integrations/channels";
+import { HttpFeedFetcher } from "../core/channels/fetcher";
+import { ChannelScheduler } from "../core/channels/scheduler";
 import { Workspaces } from "../core/workspace";
 import { electronImages } from "./images";
+import { SafeStorageChannelSecrets } from "./channel-secrets";
 import { buildMenu } from "./menu";
 import { APP_ORIGIN, registerProtocols, registerSchemes } from "./protocols";
 import { SafeStorageSecrets } from "./secrets";
@@ -236,17 +238,26 @@ async function main() {
   });
   hardenSession();
   registerProtocols(path.join(app.getAppPath(), "out"), workspaces);
-  // TODO(sync agent): replace with the real scheduler (launch + every 20 min) and OS-backed secrets.
-  const channels: ChannelSyncControl = { secrets: new MemorySecretStore(), syncNow: async () => undefined, nextSyncAt: () => null, running: () => [] };
+  // Calendar feeds: read shortly after launch, then every 20 minutes while open. Links live in the OS credential store.
+  const channels = new ChannelScheduler({
+    workspaces,
+    secrets: new SafeStorageChannelSecrets(path.join(rootDir, "channel-feeds.bin")),
+    fetcher: new HttpFeedFetcher({ appVersion: app.getVersion() }),
+    emit: broadcast,
+  });
   registerIpc(createHandlers(workspaces, createPlatform(), cloud, channels));
   Menu.setApplicationMenu(buildMenu({ isDev: !!DEV_URL || !app.isPackaged, send: (command) => broadcast("menu-command", { command }), openDataFolder: () => void shell.openPath(workspaces.current.dir) }));
   createMainWindow();
+  channels.start();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createMainWindow();
   });
   app.on("window-all-closed", () => app.quit());
-  app.on("will-quit", () => workspaces.close());
+  app.on("will-quit", () => {
+    channels.stop();
+    workspaces.close();
+  });
 }
 
 void main();

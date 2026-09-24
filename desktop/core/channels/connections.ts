@@ -343,11 +343,12 @@ export interface ChannelEventRow {
   last_seen_at: string;
 }
 
-function parseConflicts(raw: string | null): ConflictInfo[] {
+/** Stored conflict JSON; NULL or malformed reads as no conflicts. */
+export function parseConflicts(raw: string | null): ConflictInfo[] {
   if (!raw) return [];
   try {
     const v = JSON.parse(raw);
-    return Array.isArray(v) ? (v as ConflictInfo[]) : [];
+    return Array.isArray(v) ? (v.filter((c) => c && typeof c === "object") as ConflictInfo[]) : [];
   } catch {
     return [];
   }

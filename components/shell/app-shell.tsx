@@ -33,6 +33,7 @@ const NAV: { href: string; label: MessageKey; icon: IconName }[] = [
   { href: "/properties", label: "nav.properties", icon: "building" },
   { href: "/tenants", label: "nav.tenants", icon: "people" },
   { href: "/rent", label: "nav.rent", icon: "wallet" },
+  { href: "/stays", label: "shortStays.nav", icon: "calendar" },
   { href: "/maintenance", label: "nav.maintenance", icon: "wrench" },
 ];
 
