@@ -6,6 +6,7 @@ import type { CloudConfig } from "../core/cloud/api";
 import { CloudService } from "../core/cloud/service";
 import { toErrorShape } from "../core/errors";
 import { createHandlers, type Handlers, type Platform } from "../core/handlers";
+import { MemorySecretStore, type ChannelSyncControl } from "../core/integrations/channels";
 import { Workspaces } from "../core/workspace";
 import { electronImages } from "./images";
 import { buildMenu } from "./menu";
@@ -140,6 +141,12 @@ function createPlatform(): Platform {
       const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
       return r.canceled ? null : r.filePaths;
     },
+    async pickImportFile() {
+      const win = focusedWindow();
+      const opts = { properties: ["openFile"] as "openFile"[], filters: [{ name: "CSV", extensions: ["csv"] }] };
+      const r = win ? await dialog.showOpenDialog(win, opts) : await dialog.showOpenDialog(opts);
+      return r.canceled ? null : r.filePaths[0] ?? null;
+    },
     async saveFile(defaultName, filter) {
       const win = focusedWindow();
       const opts = { defaultPath: path.join(app.getPath("documents"), defaultName), filters: [filter] };
@@ -229,7 +236,9 @@ async function main() {
   });
   hardenSession();
   registerProtocols(path.join(app.getAppPath(), "out"), workspaces);
-  registerIpc(createHandlers(workspaces, createPlatform(), cloud));
+  // TODO(sync agent): replace with the real scheduler (launch + every 20 min) and OS-backed secrets.
+  const channels: ChannelSyncControl = { secrets: new MemorySecretStore(), syncNow: async () => undefined, nextSyncAt: () => null, running: () => [] };
+  registerIpc(createHandlers(workspaces, createPlatform(), cloud, channels));
   Menu.setApplicationMenu(buildMenu({ isDev: !!DEV_URL || !app.isPackaged, send: (command) => broadcast("menu-command", { command }), openDataFolder: () => void shell.openPath(workspaces.current.dir) }));
   createMainWindow();
 

@@ -402,12 +402,365 @@ CREATE INDEX attachments_draft ON attachments (draft_id, sort_order);
 CREATE INDEX attachments_staging ON attachments (staging_key);
 `;
 
+// ── Migration 2: short stays ────────────────────────────────────────────────
+// The checks above are frozen with migration 1. From migration 2 on, manual
+// availability blocks join tenancies and reservations in one overlap rule.
+// Dates: tenancies and blocks use inclusive last days; reservations use an
+// exclusive check-out (the check-out day is free for the next arrival).
+
+const isTime = (col: string) => `(${col} GLOB '[0-2][0-9]:[0-5][0-9]' AND substr(${col}, 1, 2) <= '23')`;
+
+/** `datesOverlap` compares block `k` with the NEW row. */
+function blockClash(when: string, datesOverlap: string) {
+  return `
+  SELECT RAISE(ABORT, 'HAVENOS:OVERLAP:BLOCK') WHERE ${when} AND EXISTS (
+    SELECT 1 FROM availability_blocks k
+    JOIN spaces a ON a.id = k.space_id
+    JOIN spaces b ON b.id = NEW.space_id
+    WHERE k.cancelled_at IS NULL AND ${SPACES_OVERLAP} AND ${datesOverlap}
+  );`;
+}
+
+function tenancyOverlapCheckV2(when: string) {
+  const end = "COALESCE(NEW.moved_out_on, NEW.end_date, '9999-12-31')";
+  return tenancyOverlapCheck(when) + blockClash(when, `k.start_date <= ${end} AND NEW.start_date <= k.end_date`);
+}
+
+function reservationOverlapCheckV2(when: string) {
+  return reservationOverlapCheck(when) + blockClash(when, "k.start_date < NEW.check_out AND NEW.check_in <= k.end_date");
+}
+
+function blockOverlapCheck(when: string) {
+  return `
+  SELECT RAISE(ABORT, 'HAVENOS:OVERLAP:TENANCY') WHERE ${when} AND EXISTS (
+    SELECT 1 FROM tenancies t
+    JOIN spaces a ON a.id = t.space_id
+    JOIN spaces b ON b.id = NEW.space_id
+    WHERE t.cancelled_at IS NULL AND ${SPACES_OVERLAP}
+      AND t.start_date <= NEW.end_date
+      AND NEW.start_date <= COALESCE(t.moved_out_on, t.end_date, '9999-12-31')
+  );
+  SELECT RAISE(ABORT, 'HAVENOS:OVERLAP:RESERVATION') WHERE ${when} AND EXISTS (
+    SELECT 1 FROM reservations r
+    JOIN spaces a ON a.id = r.space_id
+    JOIN spaces b ON b.id = NEW.space_id
+    WHERE r.status <> 'cancelled' AND ${SPACES_OVERLAP}
+      AND r.check_in <= NEW.end_date AND NEW.start_date < r.check_out
+  );`;
+}
+
+const propertyMatchesSpace = (table: string) => `
+CREATE TRIGGER ${table}_property_matches_space BEFORE INSERT ON ${table}
+BEGIN
+  SELECT RAISE(ABORT, 'HAVENOS:WRONG_PARENT')
+  WHERE (SELECT property_id FROM spaces WHERE id = NEW.space_id) IS NOT NEW.property_id;
+END;
+CREATE TRIGGER ${table}_property_matches_space_update BEFORE UPDATE OF space_id, property_id ON ${table}
+BEGIN
+  SELECT RAISE(ABORT, 'HAVENOS:WRONG_PARENT')
+  WHERE (SELECT property_id FROM spaces WHERE id = NEW.space_id) IS NOT NEW.property_id;
+END;`;
+
+const MIGRATION_2 = `
+-- Recreated below with blocks included, and because they reference the
+-- reservations table being rebuilt.
+DROP TRIGGER tenancies_no_overlap_insert;
+DROP TRIGGER tenancies_no_overlap_update;
+
+-- Never written by earlier versions (no adapter existed). Replaced by
+-- channel_connections, which records how each listing is synced.
+DROP TABLE channel_listings;
+
+-- One external listing (e.g. an Airbnb listing) mapped to ONE lettable space.
+-- The feed link itself is a secret: it is kept in the OS credential store,
+-- never in this database, backups or logs. feed_fingerprint (SHA-256 of the
+-- link) only detects the same link being added twice.
+CREATE TABLE channel_connections (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL CHECK (channel IN ('airbnb','booking_com','other')),
+  method TEXT NOT NULL CHECK (method IN ('ical')),
+  name TEXT NOT NULL CHECK (length(trim(name)) BETWEEN 1 AND 120),
+  external_listing_id TEXT CHECK (external_listing_id IS NULL OR length(external_listing_id) BETWEEN 1 AND 64),
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','paused')),
+  feed_fingerprint TEXT CHECK (feed_fingerprint IS NULL OR length(feed_fingerprint) = 64),
+  check_in_time TEXT NOT NULL DEFAULT '15:00' CHECK ${isTime("check_in_time")},
+  check_out_time TEXT NOT NULL DEFAULT '11:00' CHECK ${isTime("check_out_time")},
+  turnover_checklist TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(turnover_checklist) AND json_type(turnover_checklist) = 'array'),
+  last_attempt_at TEXT,
+  last_success_at TEXT,
+  last_error_code TEXT,
+  -- Safe detail only (e.g. an HTTP status). Never the feed link.
+  last_error_detail TEXT NOT NULL DEFAULT '',
+  last_error_at TEXT,
+  removed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+CREATE UNIQUE INDEX channel_connections_space ON channel_connections (channel, space_id) WHERE removed_at IS NULL;
+CREATE UNIQUE INDEX channel_connections_listing ON channel_connections (channel, external_listing_id) WHERE removed_at IS NULL AND external_listing_id IS NOT NULL;
+CREATE UNIQUE INDEX channel_connections_feed ON channel_connections (feed_fingerprint) WHERE removed_at IS NULL AND feed_fingerprint IS NOT NULL;
+${propertyMatchesSpace("channel_connections")}
+
+-- Reservations, rebuilt: guest name is optional (calendar feeds don't carry
+-- it), plus sync metadata and cancellation history. Money moves to
+-- stay_ledger so imported and entered figures stay distinguishable.
+CREATE TEMP TABLE legacy_reservation_totals AS
+  SELECT id, property_id, space_id, channel, check_in, total_sen, created_at FROM reservations WHERE total_sen IS NOT NULL;
+
+CREATE TABLE reservations_v2 (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE RESTRICT,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE RESTRICT,
+  connection_id TEXT REFERENCES channel_connections(id) ON DELETE SET NULL,
+  channel TEXT NOT NULL DEFAULT 'direct' CHECK (channel IN ('direct','airbnb','booking_com','other')),
+  -- The channel's own id: Airbnb confirmation code (HM…) or the feed UID.
+  channel_reservation_id TEXT CHECK (channel_reservation_id IS NULL OR length(channel_reservation_id) BETWEEN 1 AND 255),
+  source TEXT NOT NULL DEFAULT 'manual' CHECK (source IN ('manual','feed','csv')),
+  guest_name TEXT NOT NULL DEFAULT '' CHECK (length(guest_name) <= 120),
+  guest_count INTEGER CHECK (guest_count IS NULL OR guest_count BETWEEN 1 AND 50),
+  check_in TEXT NOT NULL CHECK ${isDate("check_in")},
+  check_out TEXT NOT NULL CHECK (${isDate("check_out")} AND check_out > check_in),
+  check_in_time TEXT CHECK (check_in_time IS NULL OR ${isTime("check_in_time")}),
+  check_out_time TEXT CHECK (check_out_time IS NULL OR ${isTime("check_out_time")}),
+  status TEXT NOT NULL DEFAULT 'confirmed' CHECK (status IN ('tentative','confirmed','cancelled')),
+  cancelled_at TEXT,
+  cancel_reason TEXT NOT NULL DEFAULT '',
+  -- A synced booking its channel feed no longer lists. It keeps blocking the
+  -- dates until the landlord confirms the cancellation.
+  missing_since TEXT,
+  last_seen_at TEXT,
+  notes TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK ((status = 'cancelled') = (cancelled_at IS NOT NULL)),
+  UNIQUE (channel, channel_reservation_id)
+) STRICT;
+INSERT INTO reservations_v2 (id, space_id, property_id, channel, channel_reservation_id, source, guest_name, check_in, check_out, status, cancelled_at, notes, created_at, updated_at)
+  SELECT id, space_id, property_id, channel, channel_reservation_id, 'manual', guest_name, check_in, check_out, status,
+         CASE WHEN status = 'cancelled' THEN updated_at END, notes, created_at, updated_at
+  FROM reservations;
+DROP TABLE reservations;
+ALTER TABLE reservations_v2 RENAME TO reservations;
+CREATE INDEX reservations_space ON reservations (space_id, check_in);
+CREATE INDEX reservations_dates ON reservations (check_in, check_out);
+CREATE INDEX reservations_connection ON reservations (connection_id);
+${propertyMatchesSpace("reservations")}
+
+-- Dates the landlord takes off the market (maintenance, own use). Inclusive
+-- last day. They block tenancies and reservations like any booking.
+CREATE TABLE availability_blocks (
+  id TEXT PRIMARY KEY,
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  start_date TEXT NOT NULL CHECK ${isDate("start_date")},
+  end_date TEXT NOT NULL CHECK (${isDate("end_date")} AND end_date >= start_date),
+  reason TEXT NOT NULL CHECK (reason IN ('maintenance','personal','owner_stay','other')),
+  maintenance_id TEXT REFERENCES maintenance_requests(id) ON DELETE SET NULL,
+  notes TEXT NOT NULL DEFAULT '',
+  cancelled_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX availability_blocks_space ON availability_blocks (space_id, start_date);
+${propertyMatchesSpace("availability_blocks")}
+
+CREATE TRIGGER tenancies_no_overlap_insert BEFORE INSERT ON tenancies
+BEGIN ${tenancyOverlapCheckV2("NEW.cancelled_at IS NULL")}
+END;
+CREATE TRIGGER tenancies_no_overlap_update BEFORE UPDATE OF start_date, end_date, moved_out_on, cancelled_at ON tenancies
+BEGIN ${tenancyOverlapCheckV2("NEW.cancelled_at IS NULL")}
+END;
+CREATE TRIGGER reservations_no_overlap_insert BEFORE INSERT ON reservations
+BEGIN ${reservationOverlapCheckV2("NEW.status <> 'cancelled'")}
+END;
+CREATE TRIGGER reservations_no_overlap_update BEFORE UPDATE OF space_id, check_in, check_out, status ON reservations
+BEGIN ${reservationOverlapCheckV2("NEW.status <> 'cancelled'")}
+END;
+CREATE TRIGGER availability_blocks_no_overlap_insert BEFORE INSERT ON availability_blocks
+BEGIN ${blockOverlapCheck("NEW.cancelled_at IS NULL")}
+END;
+CREATE TRIGGER availability_blocks_no_overlap_update BEFORE UPDATE OF space_id, start_date, end_date, cancelled_at ON availability_blocks
+BEGIN ${blockOverlapCheck("NEW.cancelled_at IS NULL")}
+END;
+
+-- History for every reservation change, including those made by a sync.
+CREATE TABLE reservation_events (
+  id TEXT PRIMARY KEY,
+  reservation_id TEXT NOT NULL REFERENCES reservations(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('created','updated','dates_changed','cancelled','missing','reappeared','conflict','note')),
+  source TEXT NOT NULL CHECK (source IN ('manual','feed','csv')),
+  changes TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(changes)),
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX reservation_events_reservation ON reservation_events (reservation_id, created_at);
+
+-- What each connection's feed said last time, one row per feed event.
+-- 'conflict' rows could not be applied because the dates clash with another
+-- HavenOS record; they wait for the landlord. Blocks are informational.
+CREATE TABLE channel_events (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES channel_connections(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL CHECK (kind IN ('reservation','block')),
+  external_uid TEXT NOT NULL CHECK (length(external_uid) BETWEEN 1 AND 255),
+  confirmation_code TEXT CHECK (confirmation_code IS NULL OR length(confirmation_code) BETWEEN 1 AND 64),
+  start_date TEXT NOT NULL CHECK ${isDate("start_date")},
+  -- Exclusive, like a check-out.
+  end_date TEXT NOT NULL CHECK (${isDate("end_date")} AND end_date > start_date),
+  summary TEXT NOT NULL DEFAULT '' CHECK (length(summary) <= 200),
+  state TEXT NOT NULL CHECK (state IN ('applied','conflict','dismissed')),
+  reservation_id TEXT REFERENCES reservations(id) ON DELETE SET NULL,
+  conflict TEXT CHECK (conflict IS NULL OR json_valid(conflict)),
+  first_seen_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  UNIQUE (connection_id, external_uid)
+) STRICT;
+CREATE INDEX channel_events_state ON channel_events (state, connection_id);
+CREATE INDEX channel_events_reservation ON channel_events (reservation_id);
+
+CREATE TABLE channel_sync_runs (
+  id TEXT PRIMARY KEY,
+  connection_id TEXT NOT NULL REFERENCES channel_connections(id) ON DELETE CASCADE,
+  trigger TEXT NOT NULL CHECK (trigger IN ('launch','timer','manual','setup')),
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  outcome TEXT CHECK (outcome IS NULL OR outcome IN ('ok','failed','rejected')),
+  error_code TEXT,
+  events_seen INTEGER NOT NULL DEFAULT 0,
+  created_count INTEGER NOT NULL DEFAULT 0,
+  updated_count INTEGER NOT NULL DEFAULT 0,
+  missing_count INTEGER NOT NULL DEFAULT 0,
+  conflict_count INTEGER NOT NULL DEFAULT 0
+) STRICT;
+CREATE INDEX channel_sync_runs_connection ON channel_sync_runs (connection_id, started_at);
+
+-- Dates HavenOS asked the landlord to block on the channel by hand, marked
+-- done. The next import confirms them when the channel shows them blocked.
+CREATE TABLE channel_push_acks (
+  connection_id TEXT NOT NULL REFERENCES channel_connections(id) ON DELETE CASCADE,
+  start_date TEXT NOT NULL CHECK ${isDate("start_date")},
+  end_date TEXT NOT NULL CHECK (${isDate("end_date")} AND end_date >= start_date),
+  acked_at TEXT NOT NULL,
+  PRIMARY KEY (connection_id, start_date, end_date)
+) STRICT;
+
+-- Cleaning / inspection between stays: one per reservation, due on its
+-- check-out day.
+CREATE TABLE turnovers (
+  id TEXT PRIMARY KEY,
+  reservation_id TEXT NOT NULL UNIQUE REFERENCES reservations(id) ON DELETE CASCADE,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  space_id TEXT NOT NULL REFERENCES spaces(id) ON DELETE CASCADE,
+  due_date TEXT NOT NULL CHECK ${isDate("due_date")},
+  checkout_time TEXT NOT NULL DEFAULT '11:00' CHECK ${isTime("checkout_time")},
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','scheduled','in_progress','done','skipped')),
+  assignee_name TEXT NOT NULL DEFAULT '',
+  assignee_phone TEXT NOT NULL DEFAULT '',
+  checklist TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(checklist) AND json_type(checklist) = 'array'),
+  cost_sen INTEGER CHECK (cost_sen IS NULL OR cost_sen >= 0),
+  notes TEXT NOT NULL DEFAULT '',
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK ((status = 'done') = (completed_at IS NOT NULL))
+) STRICT;
+CREATE INDEX turnovers_due ON turnovers (due_date, status);
+CREATE INDEX turnovers_space ON turnovers (space_id, due_date);
+
+-- Short-stay money. 'imported' rows come from a channel's CSV export and are
+-- idempotent on external_ref; 'entered' rows were typed by the landlord.
+CREATE TABLE stay_imports (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK (kind IN ('airbnb_transactions','airbnb_reservations')),
+  file_name TEXT NOT NULL,
+  rows_total INTEGER NOT NULL DEFAULT 0,
+  rows_imported INTEGER NOT NULL DEFAULT 0,
+  rows_skipped INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL
+) STRICT;
+
+CREATE TABLE stay_ledger (
+  id TEXT PRIMARY KEY,
+  reservation_id TEXT REFERENCES reservations(id) ON DELETE SET NULL,
+  property_id TEXT NOT NULL REFERENCES properties(id) ON DELETE CASCADE,
+  space_id TEXT REFERENCES spaces(id) ON DELETE SET NULL,
+  channel TEXT NOT NULL CHECK (channel IN ('direct','airbnb','booking_com','other')),
+  kind TEXT NOT NULL CHECK (kind IN ('booking_value','channel_fee','cleaning_fee','tax','payout','expense','adjustment')),
+  amount_sen INTEGER NOT NULL CHECK (amount_sen BETWEEN -9999999999 AND 9999999999),
+  occurred_on TEXT NOT NULL CHECK ${isDate("occurred_on")},
+  source TEXT NOT NULL CHECK (source IN ('imported','entered')),
+  import_id TEXT REFERENCES stay_imports(id) ON DELETE SET NULL,
+  external_ref TEXT CHECK (external_ref IS NULL OR length(external_ref) BETWEEN 1 AND 200),
+  category TEXT NOT NULL DEFAULT '' CHECK (category IN ('','cleaning','laundry','supplies','utilities','repairs','platform','other')),
+  description TEXT NOT NULL DEFAULT '',
+  voided_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  CHECK (source = 'imported' OR external_ref IS NULL)
+) STRICT;
+CREATE UNIQUE INDEX stay_ledger_external ON stay_ledger (external_ref) WHERE external_ref IS NOT NULL;
+CREATE INDEX stay_ledger_reservation ON stay_ledger (reservation_id);
+CREATE INDEX stay_ledger_property ON stay_ledger (property_id, occurred_on);
+
+INSERT INTO stay_ledger (id, reservation_id, property_id, space_id, channel, kind, amount_sen, occurred_on, source, description, created_at, updated_at)
+  SELECT lower(hex(randomblob(16))), id, property_id, space_id, channel, 'booking_value', total_sen, check_in, 'entered', '', created_at, created_at
+  FROM legacy_reservation_totals;
+DROP TABLE legacy_reservation_totals;
+
+-- Attachments, rebuilt to allow turnover photos as an owner.
+CREATE TABLE attachments_v2 (
+  id TEXT PRIMARY KEY,
+  property_id TEXT REFERENCES properties(id) ON DELETE CASCADE,
+  maintenance_id TEXT REFERENCES maintenance_requests(id) ON DELETE CASCADE,
+  tenancy_id TEXT REFERENCES tenancies(id) ON DELETE CASCADE,
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  payment_id TEXT REFERENCES payments(id) ON DELETE CASCADE,
+  draft_id TEXT REFERENCES drafts(id) ON DELETE CASCADE,
+  turnover_id TEXT REFERENCES turnovers(id) ON DELETE CASCADE,
+  staging_key TEXT,
+  purpose TEXT NOT NULL CHECK (purpose IN ('photo','document','receipt')),
+  file_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL UNIQUE,
+  thumb_name TEXT UNIQUE,
+  mime_type TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL CHECK (size_bytes > 0),
+  sha256 TEXT NOT NULL,
+  width INTEGER,
+  height INTEGER,
+  caption TEXT NOT NULL DEFAULT '',
+  sort_order INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  CHECK ((property_id IS NOT NULL) + (maintenance_id IS NOT NULL) + (tenancy_id IS NOT NULL) + (tenant_id IS NOT NULL)
+       + (payment_id IS NOT NULL) + (draft_id IS NOT NULL) + (turnover_id IS NOT NULL) + (staging_key IS NOT NULL) = 1)
+) STRICT;
+INSERT INTO attachments_v2 (id, property_id, maintenance_id, tenancy_id, tenant_id, payment_id, draft_id, staging_key, purpose, file_name,
+                            stored_name, thumb_name, mime_type, size_bytes, sha256, width, height, caption, sort_order, created_at)
+  SELECT id, property_id, maintenance_id, tenancy_id, tenant_id, payment_id, draft_id, staging_key, purpose, file_name,
+         stored_name, thumb_name, mime_type, size_bytes, sha256, width, height, caption, sort_order, created_at
+  FROM attachments;
+DROP TABLE attachments;
+ALTER TABLE attachments_v2 RENAME TO attachments;
+CREATE INDEX attachments_property ON attachments (property_id, sort_order);
+CREATE INDEX attachments_maintenance ON attachments (maintenance_id, sort_order);
+CREATE INDEX attachments_tenancy ON attachments (tenancy_id);
+CREATE INDEX attachments_tenant ON attachments (tenant_id);
+CREATE INDEX attachments_payment ON attachments (payment_id);
+CREATE INDEX attachments_draft ON attachments (draft_id, sort_order);
+CREATE INDEX attachments_turnover ON attachments (turnover_id, sort_order);
+CREATE INDEX attachments_staging ON attachments (staging_key);
+`;
+
 export interface Migration {
   version: number;
   name: string;
   sql: string;
 }
 
-export const MIGRATIONS: readonly Migration[] = [{ version: 1, name: "initial local schema", sql: MIGRATION_1 }];
+export const MIGRATIONS: readonly Migration[] = [
+  { version: 1, name: "initial local schema", sql: MIGRATION_1 },
+  { version: 2, name: "short stays: channel connections, reservations history, blocks, turnovers, ledger", sql: MIGRATION_2 },
+];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

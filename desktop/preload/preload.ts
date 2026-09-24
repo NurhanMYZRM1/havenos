@@ -7,7 +7,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 type Listener = (payload: unknown) => void;
-const EVENTS = ["data-changed", "cloud-progress", "menu-command"] as const;
+const EVENTS = ["data-changed", "cloud-progress", "channel-sync", "menu-command"] as const;
 
 // One IPC subscription per event, fanned out to any number of UI listeners.
 const listeners = new Map<string, Set<Listener>>(EVENTS.map((e) => [e, new Set<Listener>()]));

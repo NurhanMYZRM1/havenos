@@ -13,11 +13,15 @@
 import type { IsoDate, YearMonth } from "../domain/dates";
 import type {
   AttachmentPurpose,
+  BlockReason,
+  ChannelId,
+  ChannelMethod,
   ChargeKind,
   ChargeState,
   DepositEntryKind,
   DepositType,
   ExportDataset,
+  LedgerKind,
   MaintenanceCategory,
   MaintenancePriority,
   MaintenanceStatus,
@@ -25,9 +29,14 @@ import type {
   PaymentMethod,
   PropertyType,
   RentalMode,
+  ReservationChannel,
+  ReservationSource,
+  ReservationStatus,
   RoomType,
   SpaceKind,
+  StayExpenseCategory,
   TenancyStatus,
+  TurnoverStatus,
 } from "../domain/enums";
 import type { Sen } from "../domain/money";
 import type { MessageKey } from "../i18n";
@@ -94,7 +103,7 @@ export type SettingsInput = Omit<Settings, "lastLocalBackupAt">;
 
 // ── Attachments ────────────────────────────────────────────────────────────
 
-export type AttachmentOwnerKind = "property" | "maintenance" | "tenancy" | "tenant" | "payment" | "draft" | "staging";
+export type AttachmentOwnerKind = "property" | "maintenance" | "tenancy" | "tenant" | "payment" | "draft" | "turnover" | "staging";
 
 export interface AttachmentOwner {
   kind: AttachmentOwnerKind;
@@ -730,6 +739,487 @@ export interface CloudBackupItem {
   counts: Record<string, number>;
 }
 
+// ── Short stays: channel connections ───────────────────────────────────────
+// See docs/short-stays.md. Today every connection is a calendar (iCal) feed:
+// dates only — no guest details, prices, payouts or listing content — and
+// HavenOS can't write to the channel. The UI must describe a connection by its
+// `capabilities`, never assume more.
+
+export interface ChannelCapabilities {
+  method: ChannelMethod;
+  /** False: every sync reads the whole calendar and changes are inferred. */
+  incremental: boolean;
+  /** False: HavenOS can't block dates on the channel; the landlord does it by hand. */
+  pushAvailability: boolean;
+  /** False: no guest names or contact details. */
+  guestDetails: boolean;
+  /** False: no prices, fees or payouts. */
+  money: boolean;
+  /** How long the channel itself may take to pick up dates blocked there from another calendar. */
+  channelImportDelayMinutes: number | null;
+}
+
+export type ChannelHealth = "ok" | "syncing" | "stale" | "error" | "paused" | "never_synced" | "feed_link_missing";
+
+export type ChannelErrorCode =
+  | "offline"
+  | "timeout"
+  | "http_error"
+  | "not_found"
+  | "forbidden"
+  | "rate_limited"
+  | "not_a_calendar"
+  | "too_large"
+  | "feed_shrank"
+  | "feed_link_missing"
+  | "credential_store"
+  | "internal";
+
+export type ChannelSyncTrigger = "launch" | "timer" | "manual" | "setup";
+
+export interface ChannelConnection {
+  id: ID;
+  channel: ChannelId;
+  method: ChannelMethod;
+  name: string;
+  externalListingId: string | null;
+  propertyId: ID;
+  propertyName: string;
+  spaceId: ID;
+  spacePath: string;
+  spaceKind: SpaceKind;
+  status: "active" | "paused";
+  health: ChannelHealth;
+  capabilities: ChannelCapabilities;
+  hasFeedLink: boolean;
+  /** Safe description of the link, e.g. "airbnb.com · listing …4821". Never the link itself. */
+  feedLinkHint: string | null;
+  checkInTime: string;
+  checkOutTime: string;
+  turnoverChecklist: string[];
+  lastAttemptAt: string | null;
+  lastSuccessAt: string | null;
+  /** When HavenOS will next read the feed, if the app stays open. */
+  nextSyncAt: string | null;
+  lastError: { code: ChannelErrorCode; detail: string; at: string } | null;
+  stale: boolean;
+  counts: { upcoming: number; conflicts: number; missing: number; pendingBlocks: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChannelSyncRun {
+  id: ID;
+  trigger: ChannelSyncTrigger;
+  startedAt: string;
+  finishedAt: string | null;
+  outcome: "ok" | "failed" | "rejected" | null;
+  errorCode: ChannelErrorCode | null;
+  eventsSeen: number;
+  created: number;
+  updated: number;
+  missing: number;
+  conflicts: number;
+}
+
+/** A HavenOS record that clashes with a channel booking. */
+export interface ConflictInfo {
+  kind: "tenancy" | "reservation" | "block";
+  id: ID;
+  spaceId: ID;
+  spacePath: string;
+  /** Tenant name, guest name / channel, or block reason. */
+  who: string;
+  start: IsoDate;
+  /** Last occupied day (inclusive); null for an open-ended tenancy. */
+  end: IsoDate | null;
+  channel: ReservationChannel | null;
+  /** HavenOS may cancel it for the landlord (a manual block or direct reservation). */
+  replaceable: boolean;
+  href: string;
+}
+
+export type ChannelEventAction = "retry" | "dismiss" | "replace";
+
+export interface ChannelEventView {
+  id: ID;
+  connectionId: ID;
+  connectionName: string;
+  kind: "reservation" | "block";
+  confirmationCode: string | null;
+  /** Dates as the channel lists them (check-out exclusive). */
+  checkIn: IsoDate;
+  checkOut: IsoDate;
+  state: "applied" | "conflict" | "dismissed";
+  reservationId: ID | null;
+  /** For a date change that couldn't be applied: the dates HavenOS still holds. */
+  currentDates: { checkIn: IsoDate; checkOut: IsoDate } | null;
+  conflicts: ConflictInfo[];
+  firstSeenAt: string;
+  lastSeenAt: string;
+}
+
+export interface ChannelConnectionDetail extends ChannelConnection {
+  runs: ChannelSyncRun[];
+  /** Conflicts and dismissed conflicts (applied events aren't listed). */
+  events: ChannelEventView[];
+  missingReservations: ReservationSummary[];
+}
+
+export interface ChannelConnectionCreate {
+  channel: ChannelId;
+  name: string;
+  spaceId: ID;
+  feedUrl: string;
+  checkInTime: string;
+  checkOutTime: string;
+}
+
+export interface ChannelConnectionUpdate {
+  id: ID;
+  name: string;
+  spaceId: ID;
+  /** null keeps the stored link. */
+  feedUrl: string | null;
+  checkInTime: string;
+  checkOutTime: string;
+  turnoverChecklist: string[];
+}
+
+/** Dates HavenOS knows are taken that the channel's calendar still shows as open. */
+export interface PendingBlock {
+  connectionId: ID;
+  connectionName: string;
+  channel: ChannelId;
+  spaceId: ID;
+  spacePath: string;
+  /** First and last night to block (inclusive). */
+  start: IsoDate;
+  end: IsoDate;
+  reasons: { kind: "tenancy" | "reservation" | "block"; label: string; href: string }[];
+  acknowledgedAt: string | null;
+}
+
+// ── Short stays: reservations, blocks, turnovers ───────────────────────────
+
+export interface ReservationSummary {
+  id: ID;
+  propertyId: ID;
+  propertyName: string;
+  spaceId: ID;
+  spacePath: string;
+  spaceKind: SpaceKind;
+  channel: ReservationChannel;
+  channelReservationId: string | null;
+  connectionId: ID | null;
+  connectionName: string | null;
+  source: ReservationSource;
+  /** Empty when the channel doesn't share it (calendar feeds). */
+  guestName: string;
+  guestCount: number | null;
+  checkIn: IsoDate;
+  /** Exclusive: the check-out day is free for the next arrival. */
+  checkOut: IsoDate;
+  checkInTime: string | null;
+  checkOutTime: string | null;
+  nights: number;
+  status: ReservationStatus;
+  /** The channel feed stopped listing it; it may have been cancelled. */
+  missingSince: string | null;
+  lastSeenAt: string | null;
+  /** Dates come from a channel feed and can only be changed on the channel. */
+  datesLocked: boolean;
+  turnoverId: ID | null;
+  turnoverStatus: TurnoverStatus | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReservationEvent {
+  id: ID;
+  kind: "created" | "updated" | "dates_changed" | "cancelled" | "missing" | "reappeared" | "conflict" | "note";
+  source: ReservationSource;
+  changes: { field: string; from: string | number | null; to: string | number | null }[];
+  note: string;
+  createdAt: string;
+}
+
+export interface ReservationDetail extends ReservationSummary {
+  notes: string;
+  cancelledAt: string | null;
+  cancelReason: string;
+  events: ReservationEvent[];
+  ledger: LedgerEntry[];
+}
+
+export interface ReservationCreate {
+  spaceId: ID;
+  guestName: string;
+  guestCount: number | null;
+  checkIn: IsoDate;
+  checkOut: IsoDate;
+  checkInTime: string | null;
+  checkOutTime: string | null;
+  status: "tentative" | "confirmed";
+  channel: ReservationChannel;
+  channelReservationId: string | null;
+  notes: string;
+}
+
+/** For synced reservations only guest details, times and notes can change. */
+export type ReservationUpdate = Omit<ReservationCreate, "spaceId" | "channel" | "channelReservationId"> & { id: ID };
+
+export interface ReservationFilter {
+  from: IsoDate;
+  to: IsoDate;
+  propertyId: ID | null;
+  spaceId: ID | null;
+  includeCancelled: boolean;
+}
+
+export interface AvailabilityBlockInput {
+  spaceId: ID;
+  startDate: IsoDate;
+  /** Last blocked night (inclusive). */
+  endDate: IsoDate;
+  reason: BlockReason;
+  maintenanceId: ID | null;
+  notes: string;
+}
+
+export interface AvailabilityBlock extends AvailabilityBlockInput {
+  id: ID;
+  propertyId: ID;
+  propertyName: string;
+  spacePath: string;
+  cancelledAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChecklistItem {
+  label: string;
+  done: boolean;
+}
+
+export interface TurnoverItem {
+  id: ID;
+  reservationId: ID;
+  propertyId: ID;
+  propertyName: string;
+  spaceId: ID;
+  spacePath: string;
+  guestName: string;
+  channel: ReservationChannel;
+  dueDate: IsoDate;
+  checkoutTime: string;
+  nextCheckIn: { reservationId: ID; date: IsoDate; time: string | null; guestName: string } | null;
+  /** Hours between this check-out and the next check-in, if there is one. */
+  windowHours: number | null;
+  status: TurnoverStatus;
+  assigneeName: string;
+  assigneePhone: string;
+  checklist: ChecklistItem[];
+  costSen: Sen | null;
+  notes: string;
+  completedAt: string | null;
+  photoCount: number;
+  unassigned: boolean;
+  /** Not done and past the next check-in (or the end of its due day). */
+  late: boolean;
+}
+
+export interface TurnoverDetail extends TurnoverItem {
+  photos: Attachment[];
+}
+
+export interface TurnoverUpdate {
+  id: ID;
+  status: TurnoverStatus;
+  assigneeName: string;
+  assigneePhone: string;
+  checkoutTime: string;
+  checklist: ChecklistItem[];
+  costSen: Sen | null;
+  notes: string;
+}
+
+export interface TurnoverFilter {
+  from: IsoDate | null;
+  to: IsoDate | null;
+  status: TurnoverStatus | "open" | "all";
+  propertyId: ID | null;
+}
+
+// ── Short stays: day view, calendar, alerts ────────────────────────────────
+
+export type StayAlertKind =
+  | "conflict"
+  | "missing_from_feed"
+  | "unassigned_turnover"
+  | "late_turnover"
+  | "stale_feed"
+  | "sync_failed"
+  | "arrival_with_critical_maintenance"
+  | "block_not_on_channel";
+
+export interface StayAlert {
+  /** Stable, e.g. "late_turnover:<id>". */
+  id: string;
+  kind: StayAlertKind;
+  severity: "critical" | "warning" | "info";
+  date: IsoDate | null;
+  propertyName: string;
+  spacePath: string | null;
+  /** Interpolated into the UI's message for `kind`. */
+  params: Record<string, string | number>;
+  href: string;
+}
+
+export interface StayDay {
+  date: IsoDate;
+  today: IsoDate;
+  arrivals: ReservationSummary[];
+  departures: ReservationSummary[];
+  inHouse: ReservationSummary[];
+  /** Due on `date`, plus any still open from earlier days. */
+  turnovers: TurnoverItem[];
+  /** Open maintenance on spaces or properties with short stays. */
+  maintenance: MaintenanceItem[];
+  alerts: StayAlert[];
+  channels: { total: number; active: number; stale: number; failing: number; oldestSuccessAt: string | null };
+}
+
+export type CalendarItemKind = "reservation" | "block" | "channel_block" | "tenancy" | "conflict";
+
+export interface CalendarItem {
+  kind: CalendarItemKind;
+  id: ID;
+  /** Nights [start, endExclusive), whatever the record's own convention. */
+  start: IsoDate;
+  endExclusive: IsoDate;
+  label: string;
+  status: ReservationStatus | null;
+  channel: ReservationChannel | null;
+  missing: boolean;
+  /** Set when the record sits on a containing or contained space. */
+  viaSpacePath: string | null;
+  href: string | null;
+}
+
+export interface CalendarRow {
+  spaceId: ID;
+  propertyId: ID;
+  propertyName: string;
+  spacePath: string;
+  spaceKind: SpaceKind;
+  connection: { id: ID; name: string; channel: ChannelId; health: ChannelHealth } | null;
+  items: CalendarItem[];
+}
+
+export interface StayCalendar {
+  from: IsoDate;
+  to: IsoDate;
+  today: IsoDate;
+  rows: CalendarRow[];
+}
+
+// ── Short stays: money ─────────────────────────────────────────────────────
+
+export type AmountSource = "imported" | "entered";
+
+export interface LedgerInput {
+  reservationId: ID | null;
+  propertyId: ID;
+  spaceId: ID | null;
+  channel: ReservationChannel;
+  kind: LedgerKind;
+  /** Negative only for adjustments. */
+  amountSen: Sen;
+  occurredOn: IsoDate;
+  category: StayExpenseCategory | "";
+  description: string;
+}
+
+export interface LedgerEntry extends LedgerInput {
+  id: ID;
+  source: AmountSource;
+  importId: ID | null;
+  propertyName: string;
+  spacePath: string | null;
+  voidedAt: string | null;
+  createdAt: string;
+}
+
+export type StayImportKind = "airbnb_transactions" | "airbnb_reservations";
+
+export interface CsvImportPreview {
+  token: ID;
+  kind: StayImportKind;
+  fileName: string;
+  rowsTotal: number;
+  rowsUsable: number;
+  rowsSkipped: number;
+  /** Rows already imported from an earlier file (skipped on commit). */
+  duplicates: number;
+  /** Listing names in the file; the landlord maps each to a space (or skips it). */
+  listings: { name: string; rows: number; suggestedSpaceId: ID | null }[];
+  matchedReservations: number;
+  newReservations: number;
+  currency: string | null;
+  warnings: string[];
+}
+
+export interface CsvImportResult {
+  importId: ID;
+  rowsImported: number;
+  rowsSkipped: number;
+  duplicates: number;
+  reservationsCreated: number;
+  reservationsUpdated: number;
+  ledgerEntries: number;
+  /** Rows whose stay clashes with another HavenOS record; money was kept, the stay wasn't created. */
+  conflicts: { confirmationCode: string; message: string }[];
+}
+
+export type PerformanceGroup = "property" | "space" | "channel" | "month";
+
+/** Imported (from a channel export) and entered (typed by the landlord) kept apart. */
+export interface PerformanceFigure {
+  importedSen: Sen;
+  enteredSen: Sen;
+  totalSen: Sen;
+}
+
+export interface PerformanceRow {
+  key: string;
+  label: string;
+  stays: number;
+  nights: number;
+  /** Booked nights ÷ nights in range, for rows that are one space; else null. */
+  occupancyPct: number | null;
+  bookingValue: PerformanceFigure;
+  cleaningFees: PerformanceFigure;
+  channelFees: PerformanceFigure;
+  taxes: PerformanceFigure;
+  payouts: PerformanceFigure;
+  expenses: PerformanceFigure;
+  /** bookingValue − channelFees − taxes − expenses. An estimate, not accounting. */
+  estimatedNetSen: Sen;
+  /** Booking value ÷ nights, for stays with a booking value. */
+  averageNightlySen: Sen | null;
+  /** Stays with no booking value recorded (e.g. synced from a calendar only). */
+  staysWithoutMoney: number;
+}
+
+export interface PerformanceReport {
+  from: YearMonth;
+  to: YearMonth;
+  groupBy: PerformanceGroup;
+  rows: PerformanceRow[];
+  totals: PerformanceRow;
+}
+
 // ── Method map ─────────────────────────────────────────────────────────────
 
 export interface ApiSpec {
@@ -820,6 +1310,48 @@ export interface ApiSpec {
   "cloud.restore": [{ id: ID }, BackupInspection];
   "cloud.openCheckout": [{ plan: "monthly" | "annual" }, null];
   "cloud.openBillingPortal": [void, null];
+
+  "channels.list": [void, ChannelConnection[]];
+  "channels.get": [{ id: ID }, ChannelConnectionDetail];
+  "channels.create": [ChannelConnectionCreate, ChannelConnection];
+  "channels.update": [ChannelConnectionUpdate, ChannelConnection];
+  "channels.setPaused": [{ id: ID; paused: boolean }, ChannelConnection];
+  /** Stops syncing and forgets the feed link. Reservations and their history are kept. */
+  "channels.remove": [{ id: ID }, null];
+  /** Read feeds now (id null = every active connection). acceptShrink applies a feed that lost most of its bookings. */
+  "channels.refresh": [{ id: ID | null; acceptShrink: boolean }, ChannelConnection[]];
+  "channels.resolveEvent": [{ eventId: ID; action: ChannelEventAction }, ChannelConnectionDetail];
+  "channels.pendingBlocks": [{ connectionId: ID | null }, PendingBlock[]];
+  "channels.acknowledgeBlock": [{ connectionId: ID; start: IsoDate; end: IsoDate; done: boolean }, PendingBlock[]];
+
+  "reservations.list": [ReservationFilter, ReservationSummary[]];
+  "reservations.get": [{ id: ID }, ReservationDetail];
+  "reservations.create": [ReservationCreate, ReservationDetail];
+  "reservations.update": [ReservationUpdate, ReservationDetail];
+  "reservations.cancel": [{ id: ID; reason: string }, ReservationDetail];
+
+  "blocks.list": [{ from: IsoDate; to: IsoDate; propertyId: ID | null; includeCancelled: boolean }, AvailabilityBlock[]];
+  "blocks.create": [AvailabilityBlockInput, AvailabilityBlock];
+  "blocks.update": [AvailabilityBlockInput & { id: ID }, AvailabilityBlock];
+  "blocks.cancel": [{ id: ID }, AvailabilityBlock];
+
+  "turnovers.list": [TurnoverFilter, TurnoverItem[]];
+  "turnovers.get": [{ id: ID }, TurnoverDetail];
+  "turnovers.update": [TurnoverUpdate, TurnoverDetail];
+
+  "stays.day": [{ date: IsoDate }, StayDay];
+  "stays.calendar": [{ from: IsoDate; to: IsoDate; propertyId: ID | null }, StayCalendar];
+  "stays.alerts": [void, StayAlert[]];
+  "stays.performance": [{ from: YearMonth; to: YearMonth; groupBy: PerformanceGroup; propertyId: ID | null }, PerformanceReport];
+
+  "ledger.list": [{ from: IsoDate; to: IsoDate; propertyId: ID | null; reservationId: ID | null }, LedgerEntry[]];
+  "ledger.create": [LedgerInput, LedgerEntry];
+  "ledger.void": [{ id: ID }, null];
+
+  /** Opens a file dialog in main, parses the CSV and holds it until commit or discard. */
+  "imports.pickAirbnbCsv": [void, CsvImportPreview | null];
+  "imports.commit": [{ token: ID; listingMap: Record<string, ID | null> }, CsvImportResult];
+  "imports.discard": [{ token: ID }, null];
 }
 
 export type ApiMethod = keyof ApiSpec;
@@ -828,8 +1360,10 @@ export type ApiResult<M extends ApiMethod> = ApiSpec[M][1];
 
 /** Events pushed from main to the UI. */
 export interface ApiEvents {
-  "data-changed": { reason: "restore" | "workspace" | "cloud" };
+  "data-changed": { reason: "restore" | "workspace" | "cloud" | "channel-sync" };
   "cloud-progress": CloudProgress;
+  /** Calendar feeds being read right now (empty when idle). */
+  "channel-sync": { running: ID[] };
   "menu-command": { command: "new-property" | "new-maintenance" | "record-payment" | "backup" | "restore" | "search" | "settings" };
 }
 

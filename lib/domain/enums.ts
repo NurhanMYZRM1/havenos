@@ -59,9 +59,36 @@ export type ChargeState = (typeof CHARGE_STATES)[number];
 export const ATTACHMENT_PURPOSES = ["photo", "document", "receipt"] as const;
 export type AttachmentPurpose = (typeof ATTACHMENT_PURPOSES)[number];
 
-/** Reservation channels for future short-stay support. Only "direct" is live. */
+/** Where a short-stay reservation came from. "direct" = the landlord's own booking. */
 export const RESERVATION_CHANNELS = ["direct", "airbnb", "booking_com", "other"] as const;
 export type ReservationChannel = (typeof RESERVATION_CHANNELS)[number];
+
+/** Channels a connection can sync from (every reservation channel except direct). */
+export const CHANNEL_IDS = ["airbnb", "booking_com", "other"] as const;
+export type ChannelId = (typeof CHANNEL_IDS)[number];
+
+/** How a connection syncs. Only calendar (iCal) feeds exist today; see docs/short-stays.md. */
+export const CHANNEL_METHODS = ["ical"] as const;
+export type ChannelMethod = (typeof CHANNEL_METHODS)[number];
+
+export const RESERVATION_STATUSES = ["tentative", "confirmed", "cancelled"] as const;
+export type ReservationStatus = (typeof RESERVATION_STATUSES)[number];
+
+export const RESERVATION_SOURCES = ["manual", "feed", "csv"] as const;
+export type ReservationSource = (typeof RESERVATION_SOURCES)[number];
+
+export const BLOCK_REASONS = ["maintenance", "personal", "owner_stay", "other"] as const;
+export type BlockReason = (typeof BLOCK_REASONS)[number];
+
+export const TURNOVER_STATUSES = ["pending", "scheduled", "in_progress", "done", "skipped"] as const;
+export type TurnoverStatus = (typeof TURNOVER_STATUSES)[number];
+export const OPEN_TURNOVER_STATUSES: readonly TurnoverStatus[] = ["pending", "scheduled", "in_progress"];
+
+export const LEDGER_KINDS = ["booking_value", "channel_fee", "cleaning_fee", "tax", "payout", "expense", "adjustment"] as const;
+export type LedgerKind = (typeof LEDGER_KINDS)[number];
+
+export const STAY_EXPENSE_CATEGORIES = ["cleaning", "laundry", "supplies", "utilities", "repairs", "platform", "other"] as const;
+export type StayExpenseCategory = (typeof STAY_EXPENSE_CATEGORIES)[number];
 
 export const EXPORT_DATASETS = [
   "properties", "spaces", "tenants", "tenancies", "charges", "payments", "deposits", "maintenance",

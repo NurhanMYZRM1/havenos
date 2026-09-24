@@ -27,6 +27,18 @@ no account needed. **Cloud backup** is an optional paid add-on.
   - Estimated and actual costs, photos and files, notes, and a full change
     history.
   - List and board views with filters.
+- **Short stays (Airbnb):**
+  - Link each Airbnb listing to a unit, room or bed through Airbnb's calendar
+    export (iCal). This syncs **dates only**, at launch and every 20 minutes
+    while the app is open. No guest details, prices or payouts come through
+    the calendar, and HavenOS can't change anything on Airbnb.
+  - Short stays, tenancies and availability blocks share one overlap rule.
+    Clashing bookings are held for review; bookings that vanish from a feed are
+    flagged, never silently removed.
+  - Turnovers (cleaning between stays) with checklist, cleaner, photos and a
+    late warning. A today view with arrivals, departures and alerts.
+  - Money from the landlord's own Airbnb earnings CSV or typed in, with
+    imported and entered figures kept apart.
 - **Dashboard:** occupancy measured by each unit's arrangement; rent due,
   collected and overdue; tenancies ending; move-ins and move-outs; maintenance
   summary — all calculated from stored records.
@@ -49,6 +61,9 @@ Other commands (tests, packaging, signing) are in
 - [docs/desktop-architecture.md](docs/desktop-architecture.md) — why Electron,
   process model and security, local storage and integrity, backup format,
   domain rules, the short-stay/Airbnb path, i18n.
+- [docs/short-stays.md](docs/short-stays.md) — Airbnb calendar sync: what it
+  can and can't do, setup, conflicts, turnovers, CSV import, the approved-API
+  path.
 - [docs/desktop-release.md](docs/desktop-release.md) — dev, test, package,
   sign, notarise, install.
 - [docs/cloud-backup.md](docs/cloud-backup.md) — the optional paid cloud

@@ -2,6 +2,11 @@
  * English (Malaysia) UI copy. Plain English, no jargon. Placeholders use
  * `{name}`. Keep keys stable — a Bahasa Malaysia catalog will mirror them.
  */
+import { channelErrors } from "./en-channel-errors";
+import { moneyErrors } from "./en-money-errors";
+import { shortStaysCopy } from "./en-short-stays";
+import { stayErrors } from "./en-stay-errors";
+
 export const en = {
   app: {
     name: "HavenOS",
@@ -173,6 +178,16 @@ export const en = {
     overlap: "{space} is already let to {tenant} from {start} to {end}. Tenancies on the same unit, room or bed can't overlap.",
     overlapOpen: "{space} is already let to {tenant} from {start} with no end date. Record their move-out or set an end date first.",
     overlapReservation: "{space} has a short-stay reservation from {start} to {end}.",
+    overlapBlock: "{space} is blocked for {reason} from {start} to {end}.",
+    blockReason: {
+      maintenance: "maintenance",
+      personal: "personal use",
+      owner_stay: "an owner stay",
+      other: "another reason",
+    },
+    channels: channelErrors,
+    stays: stayErrors,
+    money: moneyErrors,
     notFound: "That record no longer exists.",
     hasTenancies: "This can't be deleted because it has tenancies. Archive it instead.",
     hasPayments: "This tenancy has payments or deposits recorded. Cancel it instead of deleting it.",
@@ -1065,4 +1080,5 @@ export const en = {
     howTo: "Install the desktop app, or run it from source with the command below.",
     devCommand: "npm run desktop:dev",
   },
+  ...shortStaysCopy,
 } as const;

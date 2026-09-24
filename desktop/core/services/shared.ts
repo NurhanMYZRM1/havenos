@@ -61,6 +61,7 @@ export const OWNER_COLUMN: Record<AttachmentOwner["kind"], string> = {
   tenant: "tenant_id",
   payment: "payment_id",
   draft: "draft_id",
+  turnover: "turnover_id",
   staging: "staging_key",
 };
 

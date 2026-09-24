@@ -122,17 +122,39 @@ Restore works in stages:
 - **Sample workspace** is a separate database, so demo records can never mix
   with real ones. It is never included in backups.
 
-## Short stays (Airbnb) — future
+## Short stays (Airbnb)
 
-Reservations are a separate table from tenancies (nights, check-out day free,
-`channel` + `channel_reservation_id`), booked against the same space tree and
-checked by the same overlap triggers. So a room on a tenancy can't also be sold
-as a short stay, and a short stay blocks a whole-unit tenancy.
+Full details, including what syncs and what doesn't:
+[short-stays.md](short-stays.md).
 
-`channel_listings` maps an external listing to one lettable space, and
-[desktop/core/integrations/channels.ts](../desktop/core/integrations/channels.ts)
-defines the adapter interface. **No channel is connected.** The app says so in
-Settings → About, and nothing is presented as linked to Airbnb.
+- **Same inventory, same rule.** Reservations are a separate table from
+  tenancies (nights; the check-out day is free; `channel` +
+  `channel_reservation_id`). Tenancies, reservations and manual
+  **availability blocks** are checked by one rule
+  (`services/availability.ts`) and the same database triggers, across the unit
+  → room → bed tree.
+- **Airbnb link = calendar (iCal) feed, dates only.** Airbnb's API is
+  invitation-only and HavenOS has no partner access. `channel_connections` maps
+  one listing to one lettable space. Adapters live behind the interfaces in
+  [desktop/core/integrations/channels.ts](../desktop/core/integrations/channels.ts).
+- **Network access stays in main.** The main process fetches feeds over HTTPS
+  (timeout, size cap, https-only redirects). The renderer's CSP is unchanged.
+- **Feed links are secrets.** They are stored in the OS credential store
+  (`channel-feeds.bin`, encrypted with `safeStorage`), never in the database,
+  backups, logs or error text.
+- **Sync** runs at launch and every 20 minutes while the app is open, only for
+  the real workspace. A fetch runs outside any transaction. Reconciliation runs
+  in one transaction, so a failure changes nothing. Imports are idempotent. A
+  booking that vanishes is flagged, never auto-cancelled. A clashing booking is
+  held as a conflict, never overwritten. A feed that suddenly loses most of its
+  bookings is rejected.
+- **History.** `reservation_events` records every change, whether made by
+  hand, by sync or by CSV import. Turnovers follow their stay.
+- **Money.** `stay_ledger` keeps *imported* (Airbnb CSV, idempotent on
+  `external_ref`) and *entered* figures apart.
+- **Schema 2** rebuilds `reservations` and `attachments` (turnover photos) and
+  keeps every existing row. The usual pre-upgrade copy is taken first. Backups
+  from schema 1 restore and migrate as before.
 
 ## Language
 

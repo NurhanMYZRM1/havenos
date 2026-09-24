@@ -153,11 +153,11 @@ export function readId(o: Obj, key: string, f: FieldErrors, opts: { required?: b
   return raw;
 }
 
-function readBool(o: Obj, key: string): boolean {
+export function readBool(o: Obj, key: string): boolean {
   return o[key] === true;
 }
 
-function readPhone(o: Obj, key: string, f: FieldErrors, required = false): string {
+export function readPhone(o: Obj, key: string, f: FieldErrors, required = false): string {
   const raw = readText(o, key, f, { required, max: 40 });
   if (!raw || f[key]) return raw;
   const parsed = normalizePhone(raw);
@@ -174,7 +174,7 @@ function readEmail(o: Obj, key: string, f: FieldErrors): string {
   return raw.toLowerCase();
 }
 
-function done<T>(f: FieldErrors, value: T): Validated<T> {
+export function done<T>(f: FieldErrors, value: T): Validated<T> {
   return Object.keys(f).length ? { ok: false, fields: f } : { ok: true, value };
 }
 

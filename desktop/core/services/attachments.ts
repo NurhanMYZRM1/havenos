@@ -14,6 +14,7 @@ const OWNER_TABLE: Record<Exclude<AttachmentOwner["kind"], "staging">, string> =
   tenant: "tenants",
   payment: "payments",
   draft: "drafts",
+  turnover: "turnovers",
 };
 
 export const MAX_FILES_PER_IMPORT = 30;

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { ApiEventName, ApiEvents, ApiMethod, ApiResult, AppInfo, AttachmentOwner } from "../../lib/api/contract";
+import type { ApiEvents, AppInfo, AttachmentOwner } from "../../lib/api/contract";
 import { isYearMonth } from "../../lib/domain/dates";
 import {
   ATTACHMENT_PURPOSES,
@@ -31,12 +31,16 @@ import {
   validateTenancyUpdate,
   validateTenantInput,
   type FieldErrors,
-  type Validated,
 } from "../../lib/domain/validate";
 import { backupFileName, BACKUP_EXTENSION } from "./backup/archive";
 import type { CloudService } from "./cloud/service";
 import { folderStats } from "./files";
 import { AppError, validationError } from "./errors";
+import { idParam, ok, text, type HandlerContext, type Handlers, type Platform } from "./handler-utils";
+import { channelHandlers } from "./handlers-channels";
+import { moneyHandlers } from "./handlers-money";
+import { stayHandlers } from "./handlers-stays";
+import type { ChannelSyncControl } from "./integrations/channels";
 import { SCHEMA_VERSION } from "./schema";
 import * as attachments from "./services/attachments";
 import { dashboardSummary } from "./services/dashboard";
@@ -52,43 +56,11 @@ import * as tenancies from "./services/tenancies";
 import * as tenants from "./services/tenants";
 import type { Workspaces } from "./workspace";
 
-/** Things only the host (Electron) can do: dialogs, the OS shell, printing. */
-export interface Platform {
-  readonly name: string;
-  readonly isPackaged: boolean;
-  pickFiles(purpose: AttachmentPurpose): Promise<string[] | null>;
-  saveFile(defaultName: string, filter: { name: string; extensions: string[] }): Promise<string | null>;
-  pickFolder(): Promise<string | null>;
-  pickBackup(): Promise<string | null>;
-  openPath(target: string): Promise<void>;
-  showInFolder(target: string): void;
-  openExternal(url: string): Promise<void>;
-  receiptPdf(paymentId: string): Promise<Buffer>;
-  emit<E extends ApiEventName>(event: E, payload: ApiEvents[E]): void;
-}
-
-export type Handlers = { [M in ApiMethod]: (params: unknown) => ApiResult<M> | Promise<ApiResult<M>> };
-
-function ok<T>(v: Validated<T>): T {
-  if (!v.ok) throw validationError(v.fields);
-  return v.value;
-}
-
-function idParam(params: unknown, key = "id"): string {
-  const f: FieldErrors = {};
-  const id = readId(asObject(params), key, f);
-  if (!id) throw validationError(f);
-  return id;
-}
-
-function text(params: unknown, key: string, max = 500): string {
-  const v = asObject(params)[key];
-  return typeof v === "string" ? v.trim().slice(0, max) : "";
-}
+export type { Handlers, Platform };
 
 function owner(params: unknown): AttachmentOwner {
   const o = asObject(asObject(params).owner);
-  const kinds = ["property", "maintenance", "tenancy", "tenant", "payment", "draft", "staging"] as const;
+  const kinds = ["property", "maintenance", "tenancy", "tenant", "payment", "draft", "turnover", "staging"] as const;
   if (!isOneOf(kinds, o.kind) || typeof o.id !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(o.id)) {
     throw new AppError("VALIDATION", "validation.chooseOne");
   }
@@ -113,8 +85,9 @@ export function isAllowedExternal(url: string): boolean {
   }
 }
 
-export function createHandlers(ws: Workspaces, platform: Platform, cloud: CloudService): Handlers {
+export function createHandlers(ws: Workspaces, platform: Platform, cloud: CloudService, channels: ChannelSyncControl): Handlers {
   const core = () => ws.current;
+  const ctx: HandlerContext = { ws, platform, channels, core };
   const changed = (reason: ApiEvents["data-changed"]["reason"]) => platform.emit("data-changed", { reason });
 
   const appInfo = (): AppInfo => {
@@ -397,6 +370,10 @@ export function createHandlers(ws: Workspaces, platform: Platform, cloud: CloudS
       await cloud.openBillingPortal();
       return null;
     },
+
+    ...channelHandlers(ctx),
+    ...stayHandlers(ctx),
+    ...moneyHandlers(ctx),
   };
 
   return handlers;

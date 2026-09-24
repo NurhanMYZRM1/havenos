@@ -23,11 +23,18 @@ export interface BackupManifest {
   files: { path: string; size: number; sha256: string }[];
 }
 
-const COUNTED_TABLES = ["properties", "spaces", "tenants", "tenancies", "charges", "payments", "deposit_entries", "maintenance_requests", "attachments"];
+const COUNTED_TABLES = [
+  "properties", "spaces", "tenants", "tenancies", "charges", "payments", "deposit_entries", "maintenance_requests", "attachments",
+  // Short stays (schema 2+). Backups made before these tables existed simply don't count them.
+  "reservations", "availability_blocks", "turnovers", "channel_connections",
+];
 
 function countRecords(db: Db): Record<string, number> {
   const counts: Record<string, number> = {};
-  for (const table of COUNTED_TABLES) counts[table] = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
+  for (const table of COUNTED_TABLES) {
+    if (!db.get("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", [table])) continue;
+    counts[table] = db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${table}`)?.n ?? 0;
+  }
   return counts;
 }
 
