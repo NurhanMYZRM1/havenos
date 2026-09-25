@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type SelectHTMLAttributes } from "react";
+import { useEffect, useMemo, type SelectHTMLAttributes } from "react";
 import { Spinner } from "@/components/ui/button";
 import { Icon } from "@/components/ui/icons";
 import { Pill } from "@/components/ui/status";
@@ -116,12 +116,12 @@ export function FigureCell({ f }: { f: PerformanceFigure }) {
 // ── Clock that re-renders relative times ───────────────────────────────────
 
 export function useNow(intervalMs = 30_000): number {
-  const [now, setNow] = useState(() => Date.now());
+  const { data, reload } = useApi("app.now", undefined);
   useEffect(() => {
-    const id = window.setInterval(() => setNow(Date.now()), intervalMs);
+    const id = window.setInterval(reload, intervalMs);
     return () => window.clearInterval(id);
-  }, [intervalMs]);
-  return now;
+  }, [intervalMs, reload]);
+  return data ?? Date.now();
 }
 
 // ── Sync indicator ─────────────────────────────────────────────────────────

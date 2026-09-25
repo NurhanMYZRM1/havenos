@@ -112,6 +112,7 @@ export function createHandlers(ws: Workspaces, platform: Platform, cloud: CloudS
 
   const handlers: Handlers = {
     "app.info": () => appInfo(),
+    "app.now": () => core().now().getTime(),
     "app.openDataFolder": async () => {
       await platform.openPath(core().dir);
       return null;

@@ -2,14 +2,17 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, it } from "node:test";
-import { createConnection, getConnection, getConnectionDetail, listConnections, removeConnection, updateConnection } from "../core/channels/connections";
+import { createConnection, getConnection, getConnectionDetail, listConnections, removeConnection, setConnectionPaused, updateConnection } from "../core/channels/connections";
+import { safeSyncDiagnostic } from "../core/channels/diagnostics";
 import { acknowledgeBlock, pendingBlocks } from "../core/channels/pending";
 import { ChannelScheduler } from "../core/channels/scheduler";
 import { resolveEvent, syncConnection } from "../core/channels/sync";
 import { closeCore, DB_FILE, type Core } from "../core/context";
 import { AppError } from "../core/errors";
 import { ChannelSyncError, MemorySecretStore, type FeedFetcher } from "../core/integrations/channels";
+import { feedAdapter } from "../core/integrations/registry";
 import { createReservation } from "../core/services/reservations";
+import { setSpaceArchived } from "../core/services/properties";
 import { createTenancy } from "../core/services/tenancies";
 import { clock, FIXED_NOW, makeCore, newTenant, seedProperty, tempDir } from "./helpers";
 
@@ -22,7 +25,7 @@ const URL_A = `https://www.airbnb.com/calendar/ical/900000000000000001.ics?s=${S
 
 class FakeFetcher implements FeedFetcher {
   body = V1;
-  error: ChannelSyncError | null = null;
+  error: Error | null = null;
   calls = 0;
   gate: Promise<void> | null = null;
   async fetch(_url: string) {
@@ -96,6 +99,25 @@ function errorKey(fn: () => unknown): string {
 }
 
 describe("channel connections", () => {
+  it("prevents archiving connected spaces, their parents and children until the connection is removed", () => {
+    for (const relation of ["self", "parent", "child"] as const) {
+      const { core, p, secrets, connect } = setup();
+      const id = connect(relation === "child" ? p.roomC : p.roomA);
+      const space = relation === "self" ? p.roomA : relation === "parent" ? p.unitA1 : p.bed1;
+      assert.equal(errorKey(() => setSpaceArchived(core, space, true)), "shortStays.connections.spaceHasConnection");
+      setConnectionPaused(core, id, true);
+      assert.equal(errorKey(() => setSpaceArchived(core, space, true)), "shortStays.connections.spaceHasConnection", "paused connections must also be moved or removed");
+      assert.equal(core.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM spaces WHERE archived_at IS NOT NULL")!.n, 0);
+      setSpaceArchived(core, p.roomB, true); // a sibling is independent
+      removeConnection(core, secrets, id);
+      setSpaceArchived(core, space, true);
+      assert.ok(core.db.get<{ archived_at: string | null }>("SELECT archived_at FROM spaces WHERE id = ?", [space])!.archived_at);
+      setSpaceArchived(core, space, false);
+      assert.equal(core.db.get<{ archived_at: string | null }>("SELECT archived_at FROM spaces WHERE id = ?", [space])!.archived_at, null);
+      closeCore(core);
+    }
+  });
+
   it("keeps the feed link out of the database, and rejects duplicates and unlettable spaces", () => {
     const { core, p, secrets, connect, control } = setup();
     const id = connect();
@@ -286,6 +308,86 @@ describe("calendar sync", () => {
     closeCore(core);
   });
 
+  it("rechecks held conflicts on read after the landlord fixes them elsewhere", async () => {
+    const { core, p, connect, sync, control } = setup();
+    const blockId = addBlock(core, p.unitA2, "2026-10-03", "2026-10-03");
+    const id = connect();
+    await sync(id);
+    const held = getConnectionDetail(core, control, id).events[0];
+    assert.deepEqual(held.conflicts.map((c) => c.id), [blockId]);
+    core.db.run("UPDATE availability_blocks SET cancelled_at = ? WHERE id = ?", [core.nowIso(), blockId]);
+    const current = getConnectionDetail(core, control, id).events[0];
+    assert.equal(current.state, "conflict", "reading never applies the pending booking");
+    assert.deepEqual(current.conflicts, []);
+    const newBlock = addBlock(core, p.unitA2, "2026-10-04", "2026-10-04");
+    assert.deepEqual(getConnectionDetail(core, control, id).events[0].conflicts.map((c) => c.id), [newBlock], "new conflicts are discovered too");
+    core.db.run("UPDATE availability_blocks SET cancelled_at = ? WHERE id = ?", [core.nowIso(), newBlock]);
+    resolveEvent(core, held.id, "retry");
+    assert.deepEqual(getConnectionDetail(core, control, id).events, []);
+    closeCore(core);
+  });
+
+  it("keeps booking-reference conflicts visible when another listing owns the same booking", async () => {
+    const { core, p, connect, sync, control } = setup();
+    connect(p.roomA);
+    await sync(core.db.get<{ id: string }>("SELECT id FROM channel_connections")!.id);
+    const id = connect(p.roomB, "https://www.airbnb.com/calendar/ical/900000000000000002.ics?s=other");
+    await sync(id);
+    const held = getConnectionDetail(core, control, id).events;
+    assert.equal(held.length, 3);
+    assert.ok(held.every((e) => e.conflicts.length === 1 && e.conflicts[0].spaceId === p.roomA && !e.conflicts[0].replaceable));
+    closeCore(core);
+  });
+
+  it("rejects a drop of three future bookings even below half, and applies it only when accepted", async () => {
+    const { core, connect, sync, fetcher } = setup();
+    const id = connect();
+    const feed = (n: number) => ["BEGIN:VCALENDAR", ...Array.from({ length: n }, (_, i) => [
+      "BEGIN:VEVENT", `UID:booking-${i}`, `DTSTART;VALUE=DATE:202611${String(i * 2 + 1).padStart(2, "0")}`,
+      `DTEND;VALUE=DATE:202611${String(i * 2 + 2).padStart(2, "0")}`, "SUMMARY:Reserved", "END:VEVENT",
+    ].join("\n")), "END:VCALENDAR"].join("\n");
+    fetcher.body = feed(10);
+    assert.equal((await sync(id)).outcome, "ok");
+    const before = reservations(core);
+    fetcher.body = feed(7);
+    assert.equal((await sync(id)).outcome, "rejected");
+    assert.deepEqual(reservations(core), before);
+    assert.equal((await sync(id, true)).outcome, "ok");
+    assert.equal(reservations(core).filter((r) => r.missing).length, 3);
+    closeCore(core);
+  });
+
+  it("rejects exactly half of four future bookings and permits a smaller drop", async () => {
+    const { core, connect, sync, fetcher } = setup();
+    const id = connect();
+    const feed = (n: number) => ["BEGIN:VCALENDAR", ...Array.from({ length: n }, (_, i) => [
+      "BEGIN:VEVENT", `UID:booking-${i}`, `DTSTART;VALUE=DATE:202611${String(i * 2 + 1).padStart(2, "0")}`,
+      `DTEND;VALUE=DATE:202611${String(i * 2 + 2).padStart(2, "0")}`, "SUMMARY:Reserved", "END:VEVENT",
+    ].join("\n")), "END:VCALENDAR"].join("\n");
+    fetcher.body = feed(5);
+    await sync(id);
+    fetcher.body = feed(4);
+    assert.equal((await sync(id)).outcome, "ok");
+    fetcher.body = feed(2);
+    assert.equal((await sync(id)).outcome, "rejected");
+    closeCore(core);
+  });
+
+  it("reports unsupported recurrence without partially applying a feed", async () => {
+    const { core, p, secrets, fetcher, sync, control } = setup();
+    const id = createConnection(core, secrets, { channel: "other", name: "Other calendar", spaceId: p.roomA, feedUrl: "https://calendar.example.com/export.ics", checkInTime: "15:00", checkOutTime: "11:00" });
+    fetcher.body = fixture("ical", "generic-lf.ics");
+    await sync(id);
+    const before = reservations(core);
+    fetcher.body = fetcher.body.replace("END:VCALENDAR", "BEGIN:VEVENT\nUID:repeat\nDTSTART;VALUE=DATE:20261201\nRRULE:FREQ=WEEKLY;COUNT=5\nEND:VEVENT\nEND:VCALENDAR");
+    assert.equal((await sync(id, true)).errorCode, "unsupported_recurrence", "Apply anyway only overrides shrink protection");
+    assert.deepEqual(reservations(core), before);
+    const detail = getConnectionDetail(core, control, id);
+    assert.equal(detail.lastError?.code, "unsupported_recurrence");
+    assert.equal(detail.runs[0].errorCode, "unsupported_recurrence");
+    closeCore(core);
+  });
+
   it("the shrink guard rejects an emptied feed until the landlord accepts it", async () => {
     const { core, connect, sync, fetcher, control } = setup();
     const id = connect();
@@ -312,7 +414,7 @@ describe("calendar sync", () => {
     closeCore(core);
   });
 
-  it("a failed fetch leaves data untouched and records only an error code", async () => {
+  it("a failed fetch leaves data untouched and records a safe diagnostic", async () => {
     const { core, connect, sync, fetcher, control } = setup();
     const id = connect();
     await sync(id);
@@ -324,6 +426,7 @@ describe("calendar sync", () => {
     assert.equal(count(core, "SELECT COUNT(*) AS n FROM channel_events"), before.events);
     const view = getConnection(core, control, id);
     assert.deepEqual(view.lastError && [view.lastError.code, view.lastError.detail], ["http_error", "503"]);
+    assert.equal(getConnectionDetail(core, control, id).runs[0].diagnostic, "ChannelSyncError: channel sync failed: http_error (503)");
 
     fetcher.error = null;
     fetcher.body = "<html>Please log in</html>";
@@ -349,6 +452,60 @@ describe("calendar sync", () => {
       const bytes = fs.readFileSync(path.join(dir, f));
       assert.ok(!bytes.includes(SECRET), `${f} holds the secret`);
       assert.ok(!bytes.includes("calendar/ical/900000000000000001.ics"), `${f} holds the link`);
+    }
+  });
+
+  it("stores useful internal diagnostics and strips links, queries and secrets from errors, names and logs", async () => {
+    const { dir, core, connect, fetcher, secrets, control } = setup();
+    const id = connect();
+    const logs: string[] = [];
+    const scheduler = new ChannelScheduler({ workspaces: { current: core, workspace: "main" }, secrets, fetcher, emit: () => undefined, log: (line) => logs.push(line) });
+    fetcher.error = new ChannelSyncError("internal", `space_archived ${URL_A} s=${SECRET} ?token=hidden-token&other=value`);
+    fetcher.error.name = `DatabaseError ${URL_A}`;
+    const out = await scheduler.syncOne(id, "manual", false, false);
+    const serialized = JSON.stringify({ out, detail: getConnectionDetail(core, control, id), runs: core.db.all("SELECT * FROM channel_sync_runs"), logs });
+    for (const value of [URL_A, SECRET, "hidden-token", "?token=", "s="]) assert.ok(!serialized.includes(value), value);
+    assert.match(out!.diagnostic!, /DatabaseError/);
+    assert.match(out!.diagnostic!, /space_archived/);
+    assert.ok(logs[0].includes("space_archived"));
+    assert.equal(safeSyncDiagnostic(new TypeError("broken invariant")), "TypeError: broken invariant");
+    closeCore(core);
+    for (const f of fs.readdirSync(dir).filter((n) => n.startsWith(DB_FILE))) {
+      const bytes = fs.readFileSync(path.join(dir, f));
+      assert.ok(!bytes.includes(SECRET) && !bytes.includes(URL_A) && !bytes.includes("hidden-token"), `${f} leaked a secret`);
+    }
+  });
+
+  it("redacts bare feed tokens from original parser and reconciliation exceptions", async () => {
+    const { core, connect, sync, control } = setup();
+    const id = connect();
+    const adapter = feedAdapter("airbnb")!;
+    const parse = adapter.parse;
+    adapter.parse = () => { throw new TypeError(`parser failed for ${SECRET}`); };
+    try {
+      const out = await sync(id);
+      assert.equal(out.errorCode, "not_a_calendar");
+      assert.equal(out.diagnostic, "TypeError: parser failed for [redacted]");
+    } finally {
+      adapter.parse = parse;
+    }
+    const run = core.db.run.bind(core.db);
+    core.db.run = (sql, params) => {
+      if (sql.includes("INSERT INTO reservations")) throw new RangeError(`reconcile failed for ${SECRET}`);
+      return run(sql, params);
+    };
+    const out = await sync(id);
+    assert.equal(out.errorCode, "internal");
+    assert.equal(out.diagnostic, "RangeError: reconcile failed for [redacted]");
+    assert.ok(!JSON.stringify(getConnectionDetail(core, control, id)).includes(SECRET));
+    assert.equal(reservations(core).length, 0, "reconciliation was rolled back");
+    closeCore(core);
+  });
+
+  it("redacts raw, encoded and twice-encoded URLs and secret assignments", () => {
+    for (const value of [URL_A, encodeURIComponent(URL_A), encodeURIComponent(encodeURIComponent(URL_A)), `s=${SECRET}`, `s%3D${SECRET}`, "?other=private&value=hidden", "calendar.example.com/private.ics"]) {
+      const diagnostic = safeSyncDiagnostic(new TypeError(`failed ${value}`));
+      assert.equal(diagnostic, "TypeError: failed [redacted]");
     }
   });
 });

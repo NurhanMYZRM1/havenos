@@ -1,5 +1,6 @@
 /** Errors raised by the short-stay ledger and CSV imports (errors.money.*). */
 export const moneyErrors = {
+  notAirbnbCsvHeaders: "This file isn't a recognised Airbnb export. Unrecognised column headers: {headers}. In Airbnb, go to Earnings → Transaction history and choose Export CSV.",
   notAirbnbCsv: "This file isn't an Airbnb earnings or reservations export. In Airbnb, go to Earnings → Transaction history and choose Export CSV.",
   emptyCsv: "This file has no rows to import.",
   importExpired: "This import preview has expired. Choose the file again.",
@@ -17,31 +18,4 @@ export const moneyErrors = {
   rangeTooLong: "Choose at most 24 months.",
   listingUnknown: "“{name}” isn't a listing in this file.",
   spaceMissing: "Choose a unit, room or bed that still exists.",
-  warn: {
-    payoutRows: "{n} payout transfer rows were left out. Each adds up the reservation lines it pays, and those lines are imported instead.",
-    otherCurrency: "{n} rows in {currency} were left out. HavenOS records ringgit (MYR) only.",
-    noCurrencyColumn: "The file has no Currency column, so amounts were read as ringgit (MYR).",
-    badDate: "Row {row}: “{value}” isn't a date in Airbnb's month/day/year (or YYYY-MM-DD) format, so the row was left out.",
-    badAmount: "Row {row}: “{value}” isn't an amount HavenOS can read, so the row was left out.",
-    extraColumns: "Row {row} has more values than the header (probably an unquoted comma), so it was left out.",
-    missingDate: "Row {row} has no date, so it was left out.",
-    moreProblems: "…and {n} more rows with problems.",
-    unknownType: "{n} rows of type “{type}” were recorded as adjustments. Check them in the ledger.",
-    upcoming: "{n} rows are payouts Airbnb hasn't released yet. Their stays are added now; their money is imported from the Paid report after release.",
-    remittedTax: "Taxes Airbnb collected and paid itself ({amount}) aren't counted as your income or your tax.",
-    noMoneyInReservations: "The reservations export has no fees or payouts, so only stays and guest names are imported. For money figures, import Earnings → Transaction history.",
-    willCancel: "{n} stays are cancelled in this file and will be marked cancelled in HavenOS.",
-    noListing: "{n} rows have no listing and no matching stay, so they will be left out.",
-  },
-  label: {
-    total: "Total",
-    noSpace: "{property} · not linked to a unit",
-    noChannel: "Not tied to a channel",
-    channel: {
-      direct: "Direct",
-      airbnb: "Airbnb",
-      booking_com: "Booking.com",
-      other: "Other",
-    },
-  },
 } as const;

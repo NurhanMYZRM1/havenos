@@ -49,7 +49,7 @@ export const RESERVATION_SELECT = `
   LEFT JOIN turnovers tv ON tv.reservation_id = r.id`;
 
 export function channelLabel(channel: ReservationChannel): string {
-  return t(`errors.stays.channel.${channel}` as MessageKey);
+  return t(`shortStays.enums.reservationChannel.${channel}` as MessageKey);
 }
 
 export function reservationHref(id: string): string {

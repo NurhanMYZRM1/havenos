@@ -204,10 +204,11 @@ export function validateDayParams(input: unknown): Validated<{ date: IsoDate }> 
   return done(f, { date: readDate(o, "date", f, { required: true }) ?? "1970-01-01" });
 }
 
-export function validateCalendarParams(input: unknown): Validated<{ from: IsoDate; to: IsoDate; propertyId: string | null }> {
+export function validateCalendarParams(input: unknown): Validated<{ from: IsoDate; to: IsoDate; propertyId: string | null; includeCancelled: boolean }> {
   const o = asObject(input);
   const f: FieldErrors = {};
   const range = readRange(o, f);
   if (!f.from && !f.to && daysBetween(range.from, range.to) >= MAX_CALENDAR_DAYS) f.to = "errors.stays.calendarRange";
-  return done(f, { ...range, propertyId: readId(o, "propertyId", f, { required: false }) });
+  if (o.includeCancelled !== undefined && typeof o.includeCancelled !== "boolean") f.includeCancelled = "validation.chooseOne";
+  return done(f, { ...range, propertyId: readId(o, "propertyId", f, { required: false }), includeCancelled: readBool(o, "includeCancelled") });
 }

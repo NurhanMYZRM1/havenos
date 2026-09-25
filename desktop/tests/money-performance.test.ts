@@ -92,6 +92,7 @@ describe("short-stay performance", () => {
         channelFees: fig(2400, 0),
         taxes: fig(0, 0),
         payouts: fig(77600, 0),
+        adjustments: fig(0, 0),
         expenses: fig(0, 15000), // RM 50 entered + RM 100 maintenance; the turnover is due in October
         estimatedNetSen: 140000 - 2400 - 15000,
         averageNightlySen: 20000, // RM 1,400 ÷ 7 nights
@@ -147,5 +148,22 @@ describe("short-stay performance", () => {
     assert.equal(oct.totals.payouts.totalSen, 0);
     assert.equal(oct.totals.nights, 1);
     assert.equal(oct.totals.stays, 0);
+  });
+
+  it("shows signed imported and entered adjustments separately and counts them in net once", () => {
+    const { core, p } = scenario();
+    const stay = core.db.get<{ id: string }>("SELECT id FROM reservations WHERE channel_reservation_id = 'HMPERF0001'")!;
+    const base = { reservationId: stay.id, propertyId: p.propertyId, spaceId: p.unitA2, channel: "airbnb" as const, description: "", category: "" as const, kind: "adjustment" as const, occurredOn: "2026-10-05" };
+    createLedgerEntry(core, { ...base, amountSen: 1500 });
+    const imported = createLedgerEntry(core, { ...base, amountSen: -5000 });
+    core.db.run("UPDATE stay_ledger SET source = 'imported', external_ref = 'adjustment-test' WHERE id = ?", [imported.id]);
+    const september = performanceReport(core, { from: "2026-09", to: "2026-09", groupBy: "month", propertyId: null }).totals;
+    assert.deepEqual(september.adjustments, fig(-5000, 1500));
+    assert.deepEqual(september.bookingValue, fig(80000, 60000));
+    assert.deepEqual(september.payouts, fig(77600, 0));
+    assert.equal(september.estimatedNetSen, 122600 - 3500);
+    const october = performanceReport(core, { from: "2026-10", to: "2026-10", groupBy: "month", propertyId: null }).totals;
+    assert.deepEqual(october.adjustments, fig(0, 0), "stay adjustments follow the check-in month");
+    assert.deepEqual(october.payouts, fig(0, 0), "adjustments never also appear as payouts");
   });
 });

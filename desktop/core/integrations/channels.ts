@@ -79,8 +79,11 @@ export class ChannelSyncError extends Error {
   constructor(
     readonly code: ChannelErrorCode,
     readonly detail = "",
+    /** Sanitized original network failure; never the exception or its stack. */
+    readonly diagnostic: string | null = null,
   ) {
     super(`channel sync failed: ${code}${detail ? ` (${detail})` : ""}`);
+    this.name = "ChannelSyncError";
   }
 }
 

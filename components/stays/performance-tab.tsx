@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { EmptyIllustration } from "@/components/illustrations";
 import { Button } from "@/components/ui/button";
 import { Field, Select } from "@/components/ui/field";
@@ -24,20 +24,45 @@ function rowLabel(row: PerformanceRow, groupBy: PerformanceGroup): string {
   return row.label;
 }
 
-function Cells({ row }: { row: PerformanceRow }) {
+function ReportRow({ row, label, total = false }: { row: PerformanceRow; label: string; total?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const detailsId = useId();
+  const figures = ["bookingValue", "cleaningFees", "channelFees", "taxes", "adjustments", "expenses", "payouts"] as const;
   return (
     <>
-      <td className="tnum text-right">{row.stays}</td>
-      <td className="tnum text-right">{row.nights}</td>
-      <td className={`tnum text-right font-semibold ${row.estimatedNetSen < 0 ? "text-[#ff9d95]" : ""}`}>{formatRM(row.estimatedNetSen)}</td>
-      <td className="tnum text-right">{row.occupancyPct === null ? <span className="text-ink-3">—</span> : `${Number.isInteger(row.occupancyPct) ? row.occupancyPct : row.occupancyPct.toFixed(1)}%`}</td>
-      <td className="tnum text-right"><FigureCell f={row.bookingValue} /></td>
-      <td className="tnum text-right"><FigureCell f={row.channelFees} /></td>
-      <td className="tnum text-right"><FigureCell f={row.taxes} /></td>
-      <td className="tnum text-right"><FigureCell f={row.expenses} /></td>
-      <td className="tnum text-right"><FigureCell f={row.payouts} /></td>
-      <td className="tnum text-right">{row.averageNightlySen === null ? <span className="text-ink-3">—</span> : formatRM(row.averageNightlySen)}</td>
-      <td className="tnum text-right"><FigureCell f={row.cleaningFees} /></td>
+      <tr className={total ? "border-t-2 border-[var(--hairline-strong)] bg-surface-2/60" : undefined}>
+        <th scope="row" className="sticky left-0 z-10 bg-surface !whitespace-normal !text-left !text-[13.5px] !font-medium !normal-case !tracking-normal !text-ink">
+          <button type="button" className="flex w-full items-center gap-2 rounded text-left" aria-expanded={expanded} aria-controls={detailsId} title={t("shortStays.performance.showBreakdown")} onClick={() => setExpanded(!expanded)}>
+            <Icon name={expanded ? "chevronDown" : "chevronRight"} size={13} className="shrink-0" />
+            <span className="break-words">{label}</span>
+          </button>
+        </th>
+        <td className="tnum text-right">{row.stays}</td>
+        <td className="tnum text-right">{row.nights}</td>
+        <td className="tnum text-right">{formatRM(row.bookingValue.totalSen)}</td>
+        <td className={`tnum text-right font-semibold ${row.estimatedNetSen < 0 ? "text-[#ff9d95]" : ""}`}>{formatRM(row.estimatedNetSen)}</td>
+      </tr>
+      <tr id={detailsId} hidden={!expanded}>
+        <td colSpan={5} className="!p-4 bg-surface-2/40">
+          <h3 className="mb-3 text-[12px] font-medium text-ink-2">{t("shortStays.performance.breakdown")}</h3>
+          <dl className="grid grid-cols-2 gap-x-5 gap-y-4 xl:grid-cols-4">
+            {figures.map((key) => (
+              <div key={key}>
+                <dt className="mb-1 text-[12px] text-ink-3">{t(`shortStays.performance.cols.${key}` as MessageKey)}</dt>
+                <dd className="tnum"><FigureCell f={row[key]} /></dd>
+              </div>
+            ))}
+            <div>
+              <dt className="text-[12px] text-ink-3">{t("shortStays.performance.cols.occupancy")}</dt>
+              <dd className="tnum">{row.occupancyPct === null ? "—" : `${Number.isInteger(row.occupancyPct) ? row.occupancyPct : row.occupancyPct.toFixed(1)}%`}</dd>
+            </div>
+            <div>
+              <dt className="text-[12px] text-ink-3">{t("shortStays.performance.cols.avgNightly")}</dt>
+              <dd className="tnum">{row.averageNightlySen === null ? "—" : formatRM(row.averageNightlySen)}</dd>
+            </div>
+          </dl>
+        </td>
+      </tr>
     </>
   );
 }
@@ -57,17 +82,8 @@ export function PerformanceTab({ today }: { today: IsoDate }) {
   const cols: MessageKey[] = [
     "shortStays.performance.cols.stays",
     "shortStays.performance.cols.nights",
-    // Estimated net first, then what it's made of (booking value − fees − taxes − expenses).
-    // Cleaning fees are already inside booking value, so they come last.
-    "shortStays.performance.cols.net",
-    "shortStays.performance.cols.occupancy",
     "shortStays.performance.cols.bookingValue",
-    "shortStays.performance.cols.channelFees",
-    "shortStays.performance.cols.taxes",
-    "shortStays.performance.cols.expenses",
-    "shortStays.performance.cols.payouts",
-    "shortStays.performance.cols.avgNightly",
-    "shortStays.performance.cols.cleaningFees",
+    "shortStays.performance.cols.net",
   ];
 
   return (
@@ -107,12 +123,13 @@ export function PerformanceTab({ today }: { today: IsoDate }) {
             </div>
           ) : (
             <div className="card overflow-x-auto">
-              <table className="table">
+              <table className="table" aria-label={t("shortStays.tabs.performance")}>
+                <caption className="px-3 py-2 text-left text-[12px] text-ink-3">{t("shortStays.performance.showBreakdown")}</caption>
                 <thead>
                   <tr>
-                    <th scope="col">{t(`shortStays.enums.performanceGroup.${groupBy}` as MessageKey)}</th>
+                    <th scope="col" className="sticky left-0 z-10 bg-surface">{t(`shortStays.enums.performanceGroup.${groupBy}` as MessageKey)}</th>
                     {cols.map((c) => (
-                      <th key={c} scope="col" className="text-right">
+                      <th key={c} scope="col" className="!whitespace-normal !text-right">
                         {t(c)}
                       </th>
                     ))}
@@ -120,22 +137,10 @@ export function PerformanceTab({ today }: { today: IsoDate }) {
                 </thead>
                 <tbody>
                   {report.data.rows.map((row) => (
-                    <tr key={row.key}>
-                      <th scope="row" className="!text-left !text-[13.5px] !font-medium !normal-case !tracking-normal !text-ink">
-                        {rowLabel(row, groupBy)}
-                      </th>
-                      <Cells row={row} />
-                    </tr>
+                    <ReportRow key={row.key} row={row} label={rowLabel(row, groupBy)} />
                   ))}
+                  <ReportRow row={report.data.totals} label={t("shortStays.performance.total")} total />
                 </tbody>
-                <tfoot>
-                  <tr className="border-t-2 border-[var(--hairline-strong)] bg-surface-2/60">
-                    <th scope="row" className="!text-left !text-[13.5px] !font-semibold !normal-case !tracking-normal !text-ink">
-                      {t("shortStays.performance.total")}
-                    </th>
-                    <Cells row={report.data.totals} />
-                  </tr>
-                </tfoot>
               </table>
             </div>
           )}

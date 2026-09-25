@@ -79,6 +79,12 @@ describe("iCal parser", () => {
     assert.equal(parseIcal(cal(...events), 6).length, 6);
     assert.equal(syncErrorCode(() => parseIcal(cal(...events), 5)), "too_large");
   });
+
+  it("explicitly rejects daily, weekly and recurrence-date calendars", () => {
+    for (const rule of ["RRULE:FREQ=DAILY;COUNT=3", "RRULE:FREQ=WEEKLY;BYDAY=MO,FR", "RDATE;VALUE=DATE:20261002,20261005"]) {
+      assert.equal(syncErrorCode(() => parseIcal(cal("BEGIN:VEVENT", "UID:repeat", "DTSTART;VALUE=DATE:20261001", rule, "END:VEVENT"))), "unsupported_recurrence");
+    }
+  });
 });
 
 describe("Airbnb adapter", () => {
@@ -203,6 +209,19 @@ describe("feed fetcher", () => {
       ),
       "timeout",
     );
+  });
+
+  it("preserves a sanitized original network error name and message", async () => {
+    const fetcher = new HttpFeedFetcher({ fetchImpl: (async () => {
+      throw new TypeError(`fetch failed ${AIRBNB_URL} ${SECRET}`);
+    }) as unknown as typeof fetch });
+    await assert.rejects(fetcher.fetch(AIRBNB_URL, { timeoutMs: 1000, maxBytes: 1000 }), (err: unknown) => {
+      assert.ok(err instanceof ChannelSyncError);
+      assert.equal(err.code, "offline");
+      assert.equal(err.diagnostic, "TypeError: fetch failed [redacted] [redacted]");
+      assert.ok(!JSON.stringify(err).includes(SECRET));
+      return true;
+    });
   });
 
   it("follows up to three https redirects and refuses http ones", async () => {

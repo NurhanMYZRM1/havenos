@@ -90,7 +90,7 @@ interface Placed {
 }
 
 function blockLabel(reason: BlockReason): string {
-  return t(`errors.stays.blockReason.${reason}` as MessageKey);
+  return t(`shortStays.enums.blockReason.${reason}` as MessageKey);
 }
 
 /** Sort key following the unit → room → bed tree by sort order. */
@@ -104,7 +104,7 @@ function treeKey(s: CalSpace, byId: Map<string, CalSpace>): string {
   return parts.join("/");
 }
 
-export function stayCalendar(core: Core, params: { from: IsoDate; to: IsoDate; propertyId: string | null }, runtime: ChannelRuntime): StayCalendar {
+export function stayCalendar(core: Core, params: { from: IsoDate; to: IsoDate; propertyId: string | null; includeCancelled?: boolean }, runtime: ChannelRuntime): StayCalendar {
   const { from, to, propertyId } = params;
   if (to < from) throw new AppError("VALIDATION", "validation.endBeforeStart", { fields: { to: "validation.endBeforeStart" } });
   if (daysBetween(from, to) >= MAX_CALENDAR_DAYS) throw new AppError("VALIDATION", "errors.stays.calendarRange", { fields: { to: "errors.stays.calendarRange" } });
@@ -143,7 +143,7 @@ export function stayCalendar(core: Core, params: { from: IsoDate; to: IsoDate; p
     missing_since: string | null;
   }>(
     `SELECT id, space_id, guest_name, channel, channel_reservation_id, source, check_in, check_out, status, missing_since
-     FROM reservations WHERE status <> 'cancelled' AND check_in <= ? AND check_out > ?`,
+     FROM reservations WHERE ${params.includeCancelled ? "1 = 1" : "status <> 'cancelled'"} AND check_in <= ? AND check_out > ?`,
     [to, from],
   )) {
     own.add(r.space_id);
@@ -155,7 +155,7 @@ export function stayCalendar(core: Core, params: { from: IsoDate; to: IsoDate; p
         id: r.id,
         start: r.check_in,
         endExclusive: r.check_out,
-        label: r.guest_name || code || t("errors.stays.guestFallback", { channel: channelLabel(r.channel) }),
+        label: r.guest_name || code || t("shortStays.guest.fallback", { channel: channelLabel(r.channel) }),
         status: r.status,
         channel: r.channel,
         missing: !!r.missing_since,
@@ -254,7 +254,7 @@ export function stayCalendar(core: Core, params: { from: IsoDate; to: IsoDate; p
         id: e.id,
         start: e.start_date,
         endExclusive: e.end_date,
-        label: e.confirmation_code || e.summary || t(`errors.stays.channel.${c.channel}` as MessageKey),
+        label: e.confirmation_code || e.summary || t(`shortStays.enums.reservationChannel.${c.channel}` as MessageKey),
         status: null,
         channel: c.channel,
         missing: false,

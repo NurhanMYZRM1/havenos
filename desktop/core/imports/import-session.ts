@@ -8,7 +8,7 @@ import type { Core } from "../context";
 import { AppError, validationError } from "../errors";
 import { cancelReservation, insertReservation, updateReservationDetails } from "../services/reservations";
 import { newId } from "../services/shared";
-import { parseAirbnbCsv, type AirbnbRow, type ParsedAirbnbFile } from "./airbnb-csv";
+import { parseAirbnbCsv, type AirbnbRow, type MoneyLine, type ParsedAirbnbFile } from "./airbnb-csv";
 import { CsvSyntaxError } from "./csv";
 
 /**
@@ -156,8 +156,28 @@ function suggestSpace(core: Core, listing: string, codes: readonly string[], rem
   return matches.length === 1 ? matches[0].space_id : null;
 }
 
-function refsExist(core: Core, refs: readonly string[]): boolean {
-  return refs.every((ref) => !!core.db.get("SELECT 1 FROM stay_ledger WHERE external_ref = ?", [ref]));
+interface ImportedMoney {
+  id: string;
+  external_ref: string;
+  occurred_on: IsoDate;
+  description: string;
+}
+
+function findImportedMoney(core: Core, line: MoneyLine): ImportedMoney | null {
+  const columns = "id, external_ref, occurred_on, description";
+  const current = core.db.get<ImportedMoney>(`SELECT ${columns} FROM stay_ledger WHERE external_ref = ?`, [line.externalRef]);
+  if (current) return current;
+  const prefix = line.externalRef.slice(0, line.externalRef.lastIndexOf(":") + 1);
+  const candidates = core.db.all<ImportedMoney>(
+    `SELECT ${columns} FROM stay_ledger WHERE source = 'imported' AND external_ref >= ? AND external_ref < ?`,
+    [prefix, `${prefix}\uffff`],
+  );
+  const matching = candidates.filter((entry) => entry.external_ref === line.legacyRefForDate(entry.occurred_on));
+  return matching.find((entry) => entry.occurred_on === line.occurredOn) ?? matching[0] ?? null;
+}
+
+function moneyUnchanged(core: Core, lines: readonly MoneyLine[]): boolean {
+  return lines.every((line) => findImportedMoney(core, line)?.occurred_on === line.occurredOn);
 }
 
 export class ImportSessions {
@@ -244,15 +264,15 @@ export class ImportSessions {
         continue;
       }
       if (r.money.length) {
-        if (refsExist(core, r.money.map((m) => m.externalRef))) duplicates++;
+        if (moneyUnchanged(core, r.money)) duplicates++;
       } else if (parsed.kind === "airbnb_reservations" && r.code) {
         const existing = found.get(r.code);
         if (existing && (existing.guest_name || !r.guestName) && (r.status !== "cancelled" || existing.status === "cancelled")) duplicates++;
       }
     }
     const warnings = [...parsed.warnings];
-    if (noListing) warnings.push(t("errors.money.warn.noListing", { n: noListing }));
-    if (willCancel) warnings.push(t("errors.money.warn.willCancel", { n: willCancel }));
+    if (noListing) warnings.push({ key: "shortStays.import.warn.noListing", params: { n: noListing } });
+    if (willCancel) warnings.push({ key: "shortStays.import.warn.willCancel", params: { n: willCancel } });
 
     return {
       token,
@@ -364,7 +384,7 @@ export class ImportSessions {
       }
       out.reservationsUpdated = updatedIds.size;
 
-      // 2. Money, one ledger row per line and kind; external_ref makes re-imports no-ops.
+      // 2. Money, one ledger row per line and kind; a changed payout date updates the existing row.
       const consumed = new Set<string>();
       for (const row of parsed.rows) {
         const listing = row.listing || (row.code ? stays.get(row.code)?.listing : "") || "";
@@ -388,7 +408,22 @@ export class ImportSessions {
           continue;
         }
         let inserted = 0;
+        let updated = 0;
         for (const m of row.money) {
+          const existing = findImportedMoney(core, m);
+          if (existing) {
+            const moved = existing.occurred_on !== m.occurredOn;
+            if (moved || existing.external_ref !== m.externalRef) {
+              const description = moved
+                ? `${existing.description} · ${t("shortStays.import.previousPayoutDate", { date: existing.occurred_on })}`
+                : existing.description;
+              core.db.run("UPDATE stay_ledger SET occurred_on = ?, external_ref = ?, description = ?, updated_at = ? WHERE id = ?", [
+                m.occurredOn, m.externalRef, description, now, existing.id,
+              ]);
+            }
+            if (moved) updated++;
+            continue;
+          }
           inserted += core.db.run(
             `INSERT OR IGNORE INTO stay_ledger (id, reservation_id, property_id, space_id, channel, kind, amount_sen, occurred_on, source, import_id, external_ref, description, created_at, updated_at)
              VALUES (?, ?, ?, ?, 'airbnb', ?, ?, ?, 'imported', ?, ?, ?, ?, ?)`,
@@ -396,7 +431,7 @@ export class ImportSessions {
           ).changes;
         }
         out.ledgerEntries += inserted;
-        if (inserted) out.rowsImported++;
+        if (inserted || updated) out.rowsImported++;
         else out.duplicates++;
       }
 

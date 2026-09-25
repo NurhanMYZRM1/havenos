@@ -5,6 +5,7 @@ import { describe, it } from "node:test";
 import { AppError } from "../core/errors";
 import type { HandlerContext } from "../core/handler-utils";
 import { moneyHandlers } from "../core/handlers-money";
+import { parseAirbnbCsv } from "../core/imports/airbnb-csv";
 import { ImportSessions, IMPORT_TTL_MS } from "../core/imports/import-session";
 import { performanceReport } from "../core/services/performance";
 import { createReservation, insertReservation } from "../core/services/reservations";
@@ -78,8 +79,8 @@ describe("Airbnb transactions import", () => {
     const a = report.rows.find((r) => r.key === p.unitA2)!;
     assert.deepEqual([a.bookingValue.importedSen, a.channelFees.importedSen, a.payouts.importedSen, a.estimatedNetSen, a.stays], [165000, 4950, 160050, 160050, 3]);
     const b = report.rows.find((r) => r.key === p.roomA)!;
-    assert.deepEqual([b.bookingValue.importedSen, b.payouts.importedSen, b.estimatedNetSen], [252000, 244200, 244200]);
-    assert.equal(report.totals.payouts.totalSen, 404250, "payouts reconcile with Airbnb's transfers (RM 4,042.50)");
+    assert.deepEqual([b.bookingValue.importedSen, b.payouts.importedSen, b.adjustments.importedSen, b.estimatedNetSen], [260000, 252200, -8000, 244200]);
+    assert.equal(report.totals.payouts.totalSen + report.totals.adjustments.totalSen, 404250, "payouts plus adjustments reconcile with Airbnb's transfers (RM 4,042.50)");
   });
 
   it("re-importing the same file changes nothing and counts duplicates", () => {
@@ -114,6 +115,58 @@ describe("Airbnb transactions import", () => {
     assert.equal(second.ledgerEntries, 20);
     assert.equal(second.duplicates, 2);
     assert.equal(count(core, "SELECT COUNT(*) AS n FROM stay_ledger WHERE amount_sen = 46560 AND kind = 'payout'"), 1);
+  });
+
+  for (const legacy of [false, true]) it(`updates moved payout dates without duplicating ${legacy ? "legacy" : "current"} ledger rows`, () => {
+    const { core, p, sessions } = setup();
+    const csv = "Date,Type,Confirmation code,Start date,End date,Listing,Currency,Amount,Gross earnings,Service fee\n10/10/2026,Reservation,HMMOVEDATE,10/09/2026,10/12/2026,Studio,MYR,97.00,100.00,3.00";
+    const map = { Studio: p.unitA2 };
+    sessions.commit(core, sessions.openText(core, "paid.csv", csv).token, map);
+    if (legacy) {
+      for (const line of parseAirbnbCsv(csv, core.today()).rows[0].money) {
+        core.db.run("UPDATE stay_ledger SET external_ref = ? WHERE external_ref = ?", [line.legacyRefForDate(line.occurredOn), line.externalRef]);
+      }
+    }
+    const before = core.db.all<{ id: string; amount_sen: number; import_id: string }>("SELECT id, amount_sen, import_id FROM stay_ledger ORDER BY id");
+    const moved = csv.replace("10/10/2026", "10/14/2026");
+    const preview = sessions.openText(core, "paid-updated.csv", moved);
+    assert.equal(preview.duplicates, 0, "date changes must not be described as rows that will be skipped");
+    const result = sessions.commit(core, preview.token, map);
+    assert.deepEqual([result.rowsImported, result.duplicates, result.ledgerEntries], [1, 0, 0]);
+    assert.deepEqual(core.db.all("SELECT id, amount_sen, import_id FROM stay_ledger ORDER BY id"), before);
+    const after = core.db.all<{ occurred_on: string; description: string }>("SELECT occurred_on, description FROM stay_ledger");
+    assert.ok(after.every((line) => line.occurred_on === "2026-10-14" && line.description === "Reservation · Previously dated 2026-10-10"));
+    const again = sessions.openText(core, "paid-updated.csv", moved);
+    assert.equal(again.duplicates, 1);
+    assert.equal(sessions.commit(core, again.token, map).rowsImported, 0);
+    assert.deepEqual(core.db.all("SELECT occurred_on, description FROM stay_ledger"), after, "repeating the changed export doesn't append history twice");
+  });
+
+  it("keeps repeated legacy transaction dates attached to their rows when an export is reordered", () => {
+    const { core, p, sessions } = setup();
+    const header = "Date,Type,Confirmation code,Start date,End date,Listing,Currency,Amount,Reference";
+    const lines = [
+      "10/12/2026,Resolution Adjustment,HMAAAA1111,,,Studio,MYR,-20.00,",
+      "10/10/2026,Resolution Adjustment,HMAAAA1111,,,Studio,MYR,-20.00,",
+    ];
+    const csv = [header, ...lines].join("\n");
+    const map = { Studio: p.unitA2 };
+    sessions.commit(core, sessions.openText(core, "paid.csv", csv).token, map);
+    for (const row of parseAirbnbCsv(csv, core.today()).rows) {
+      const line = row.money[0];
+      core.db.run("UPDATE stay_ledger SET external_ref = ? WHERE external_ref = ?", [line.legacyRefForDate(line.occurredOn), line.externalRef]);
+    }
+    const before = core.db.all("SELECT id, occurred_on, description FROM stay_ledger ORDER BY id");
+    const reordered = [header, ...lines.toReversed()].join("\n");
+    const preview = sessions.openText(core, "reordered.csv", reordered);
+    assert.equal(preview.duplicates, 2);
+    const result = sessions.commit(core, preview.token, map);
+    assert.deepEqual([result.ledgerEntries, result.rowsImported, result.duplicates], [0, 0, 2]);
+    assert.deepEqual(core.db.all("SELECT id, occurred_on, description FROM stay_ledger ORDER BY id"), before);
+    const again = sessions.openText(core, "original-order.csv", csv);
+    assert.equal(again.duplicates, 2);
+    sessions.commit(core, again.token, map);
+    assert.deepEqual(core.db.all("SELECT id, occurred_on, description FROM stay_ledger ORDER BY id"), before);
   });
 
   it("enriches a calendar-synced stay instead of duplicating it", () => {
@@ -171,7 +224,7 @@ describe("Airbnb transactions import", () => {
     const preview = sessions.openText(core, "t.csv", text);
     assert.equal(preview.rowsSkipped, 6);
     assert.equal(preview.currency, "MYR, USD");
-    assert.ok(preview.warnings.some((w) => w.includes("USD")));
+    assert.ok(preview.warnings.some((w) => w.key === "shortStays.import.warn.otherCurrency" && w.params?.currency === "USD"));
     assert.ok(!preview.listings.some((l) => l.name === "Other place"));
     const result = sessions.commit(core, preview.token, { [LISTING_A]: p.unitA2, [LISTING_B]: null });
     assert.equal(result.reservationsCreated, 3);
@@ -237,7 +290,7 @@ describe("Airbnb reservations import (legacy)", () => {
     const preview = sessions.open(core, RESERVATIONS);
     assert.equal(preview.kind, "airbnb_reservations");
     assert.deepEqual([preview.matchedReservations, preview.newReservations], [1, 6]);
-    assert.ok(preview.warnings.some((w) => w.includes("1 stays are cancelled")));
+    assert.ok(preview.warnings.some((w) => w.key === "shortStays.import.warn.willCancel" && w.params?.n === 1));
     const result = sessions.commit(core, preview.token, { [LISTING_A]: p.unitA2, [LISTING_B]: p.roomA });
     assert.deepEqual([result.reservationsCreated, result.reservationsUpdated, result.ledgerEntries, result.rowsImported], [6, 1, 0, 7]);
     assert.equal(core.db.get<{ status: string }>("SELECT status FROM reservations WHERE id = ?", [r3])!.status, "cancelled");

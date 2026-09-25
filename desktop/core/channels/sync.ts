@@ -21,6 +21,7 @@ import {
 import { newId } from "../services/shared";
 import { channelLabel, findConnectionRow, parseConflicts, getConnectionRow, type ChannelEventRow, type ConnectionRow } from "./connections";
 import { FEED_MAX_BYTES, FEED_TIMEOUT_MS, statusError } from "./fetcher";
+import { safeSyncDiagnostic, sanitizeSyncText } from "./diagnostics";
 
 /**
  * The calendar sync engine.
@@ -85,7 +86,8 @@ export function shrinkRejected(core: Core, connectionId: string, snapshot: FeedS
   const before =
     core.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM channel_events WHERE connection_id = ? AND kind = 'reservation' AND end_date > ?", [connectionId, today])?.n ?? 0;
   if (before >= 1 && snapshot.events.length === 0) return true;
-  return before >= 3 && futureReservationEvents(snapshot.events, today) * 2 < before;
+  const after = futureReservationEvents(snapshot.events, today);
+  return before - after >= 3 || (before >= 3 && after * 2 <= before);
 }
 
 function reservationKey(e: FeedEvent): string {
@@ -441,10 +443,11 @@ export interface SyncOutcome {
   outcome: "ok" | "failed" | "rejected" | "skipped";
   errorCode: ChannelErrorCode | null;
   errorDetail: string;
+  diagnostic: string | null;
   changed: boolean;
 }
 
-const SKIPPED: SyncOutcome = { runId: null, outcome: "skipped", errorCode: null, errorDetail: "", changed: false };
+const SKIPPED: SyncOutcome = { runId: null, outcome: "skipped", errorCode: null, errorDetail: "", diagnostic: null, changed: false };
 
 function insertRun(core: Core, runId: string, connectionId: string, trigger: ChannelSyncTrigger, startedAt: string) {
   core.db.run("INSERT INTO channel_sync_runs (id, connection_id, trigger, started_at) VALUES (?, ?, ?, ?)", [runId, connectionId, trigger, startedAt]);
@@ -453,15 +456,15 @@ function insertRun(core: Core, runId: string, connectionId: string, trigger: Cha
 function finishRun(
   core: Core,
   run: { id: string; connectionId: string; trigger: ChannelSyncTrigger; startedAt: string },
-  result: { outcome: "ok" | "failed" | "rejected"; code: ChannelErrorCode | null; detail: string; eventsSeen: number; stats: ReconcileStats },
+  result: { outcome: "ok" | "failed" | "rejected"; code: ChannelErrorCode | null; detail: string; diagnostic: string | null; eventsSeen: number; stats: ReconcileStats },
 ) {
   const now = core.nowIso();
   core.db.tx(() => {
     if (!core.db.get("SELECT 1 FROM channel_sync_runs WHERE id = ?", [run.id])) insertRun(core, run.id, run.connectionId, run.trigger, run.startedAt);
     core.db.run(
-      `UPDATE channel_sync_runs SET finished_at = ?, outcome = ?, error_code = ?, events_seen = ?, created_count = ?, updated_count = ?, missing_count = ?, conflict_count = ?
+      `UPDATE channel_sync_runs SET finished_at = ?, outcome = ?, error_code = ?, diagnostic = ?, events_seen = ?, created_count = ?, updated_count = ?, missing_count = ?, conflict_count = ?
        WHERE id = ?`,
-      [now, result.outcome, result.code, result.eventsSeen, result.stats.created, result.stats.updated, result.stats.missing, result.stats.conflicts, run.id],
+      [now, result.outcome, result.code, result.diagnostic, result.eventsSeen, result.stats.created, result.stats.updated, result.stats.missing, result.stats.conflicts, run.id],
     );
     if (result.outcome === "ok") {
       core.db.run(
@@ -504,12 +507,13 @@ export async function syncConnection(opts: SyncOptions): Promise<SyncOutcome> {
   insertRun(core, run.id, run.connectionId, run.trigger, run.startedAt);
   const noStats: ReconcileStats = { created: 0, updated: 0, missing: 0, conflicts: 0 };
 
-  const fail = (target: Core, err: ChannelSyncError, eventsSeen = 0): SyncOutcome => {
-    finishRun(target, run, { outcome: "failed", code: err.code, detail: err.detail, eventsSeen, stats: noStats });
-    return { runId: run.id, outcome: "failed", errorCode: err.code, errorDetail: err.detail, changed: false };
+  let url: string | null = null;
+  const fail = (target: Core, err: ChannelSyncError, eventsSeen = 0, diagnostic = safeSyncDiagnostic(err, url)): SyncOutcome => {
+    const detail = sanitizeSyncText(err.detail, url);
+    finishRun(target, run, { outcome: "failed", code: err.code, detail, diagnostic, eventsSeen, stats: noStats });
+    return { runId: run.id, outcome: "failed", errorCode: err.code, errorDetail: detail, diagnostic, changed: false };
   };
 
-  let url: string | null;
   try {
     url = opts.secrets.get(conn.id);
   } catch {
@@ -521,38 +525,39 @@ export async function syncConnection(opts: SyncOptions): Promise<SyncOutcome> {
 
   let body: string | null = null;
   let fetchError: ChannelSyncError | null = null;
+  let fetchDiagnostic: string | undefined;
   try {
     const res = await opts.fetcher.fetch(url, { timeoutMs: FEED_TIMEOUT_MS, maxBytes: FEED_MAX_BYTES });
     if (res.status < 200 || res.status >= 300) throw statusError(res.status);
     body = res.body;
   } catch (err) {
     fetchError = asSyncError(err, "offline");
+    fetchDiagnostic = err instanceof ChannelSyncError && err.diagnostic ? sanitizeSyncText(err.diagnostic, url) : safeSyncDiagnostic(err, url);
+    fetchError = new ChannelSyncError(fetchError.code, sanitizeSyncText(fetchError.detail, url));
   }
-  url = null;
-
   const after = opts.getCore();
   if (!after || !findConnectionRow(after, conn.id)) return SKIPPED;
-  if (fetchError || body === null) return fail(after, fetchError ?? new ChannelSyncError("internal"));
+  if (fetchError || body === null) return fail(after, fetchError ?? new ChannelSyncError("internal"), 0, fetchDiagnostic);
 
   let snapshot: FeedSnapshot;
   try {
     snapshot = adapter.parse(body);
   } catch (err) {
-    return fail(after, asSyncError(err, "not_a_calendar"));
+    return fail(after, asSyncError(err, "not_a_calendar"), 0, safeSyncDiagnostic(err, url));
   }
 
   let result: ReconcileResult;
   try {
     result = reconcileSnapshot(after, conn.id, snapshot, { acceptShrink: opts.acceptShrink });
   } catch (err) {
-    return fail(after, asSyncError(err, "internal"), snapshot.events.length);
+    return fail(after, asSyncError(err, "internal"), snapshot.events.length, safeSyncDiagnostic(err, url));
   }
   if (result.rejected) {
-    finishRun(after, run, { outcome: "rejected", code: "feed_shrank", detail: "", eventsSeen: snapshot.events.length, stats: noStats });
-    return { runId: run.id, outcome: "rejected", errorCode: "feed_shrank", errorDetail: "", changed: false };
+    finishRun(after, run, { outcome: "rejected", code: "feed_shrank", detail: "", diagnostic: null, eventsSeen: snapshot.events.length, stats: noStats });
+    return { runId: run.id, outcome: "rejected", errorCode: "feed_shrank", errorDetail: "", diagnostic: null, changed: false };
   }
-  finishRun(after, run, { outcome: "ok", code: null, detail: "", eventsSeen: snapshot.events.length, stats: result });
-  return { runId: run.id, outcome: "ok", errorCode: null, errorDetail: "", changed: result.changed };
+  finishRun(after, run, { outcome: "ok", code: null, detail: "", diagnostic: null, eventsSeen: snapshot.events.length, stats: result });
+  return { runId: run.id, outcome: "ok", errorCode: null, errorDetail: "", diagnostic: null, changed: result.changed };
 }
 
 /** For tests and diagnostics. */

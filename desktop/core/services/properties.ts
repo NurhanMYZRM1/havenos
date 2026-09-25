@@ -14,6 +14,7 @@ import { spacesOverlap, type SpaceRef } from "../../../lib/domain/inventory";
 import type { OnboardingPlan, PlannedSpace } from "../../../lib/domain/onboarding";
 import type { Core } from "../context";
 import { AppError, notFound } from "../errors";
+import { SPACES_OVERLAP } from "../schema";
 import { findConflict } from "./availability";
 import {
   ATTACHMENT_COLUMNS,
@@ -403,6 +404,12 @@ export function updateSpace(core: Core, input: SpaceUpdate): PropertyDetail {
 export function setSpaceArchived(core: Core, id: string, archived: boolean): PropertyDetail {
   const s = loadSpace(core, id);
   if (archived) {
+    const connection = core.db.get<{ name: string }>(
+      `SELECT c.name FROM channel_connections c JOIN spaces a ON a.id = c.space_id JOIN spaces b ON b.id = ?
+       WHERE c.removed_at IS NULL AND ${SPACES_OVERLAP} LIMIT 1`,
+      [id],
+    );
+    if (connection) throw new AppError("CONFLICT", "shortStays.connections.spaceHasConnection", { params: { name: connection.name } });
     // A space with a current or future tenancy (on it or inside it) stays live.
     const live = core.db.get<{ n: number }>(
       `SELECT COUNT(*) AS n FROM tenancies t JOIN spaces x ON x.id = t.space_id

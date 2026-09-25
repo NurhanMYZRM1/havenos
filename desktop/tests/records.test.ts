@@ -10,8 +10,11 @@ import { completeDraft, currentDraft, saveDraft } from "../core/services/drafts"
 import { addMaintenanceNote, createMaintenance, getMaintenance, listMaintenance, updateMaintenance } from "../core/services/maintenance";
 import { getProperty, listProperties } from "../core/services/properties";
 import { search } from "../core/services/search";
+import { addDays } from "../../lib/domain/dates";
+import { NO_CHANNEL_RUNTIME } from "../core/services/stay-channels";
+import { stayDay } from "../core/services/stay-views";
 import { Workspaces } from "../core/workspace";
-import { FIXED_NOW, makeCore, seedProperty, tempDir, TINY_PDF, TINY_PNG } from "./helpers";
+import { clock, FIXED_NOW, makeCore, seedProperty, tempDir, TINY_PDF, TINY_PNG } from "./helpers";
 
 const maintenanceInput = (propertyId: string, spaceId: string | null) => ({
   propertyId,
@@ -194,5 +197,38 @@ describe("data persists across restarts", () => {
     ws.switchTo("main");
     assert.deepEqual(listProperties(ws.current, { includeArchived: false }).map((x) => x.name), ["Test Residences"]);
     ws.close();
+  });
+
+  it("refreshes sample dates on a new KL day, including after restart with a fake clock", () => {
+    const root = tempDir();
+    const c = clock(new Date("2030-12-31T15:59:00Z"));
+    let ws = new Workspaces({ rootDir: root, appVersion: "t", now: c.now });
+    const realProperty = seedProperty(ws.current).propertyId;
+    ws.switchTo("sample");
+    const initial = stayDay(ws.current, ws.current.today(), NO_CHANNEL_RUNTIME);
+    assert.ok(initial.arrivals.length > 0);
+    assert.ok(initial.turnovers.some((t) => t.late));
+    const firstId = initial.arrivals[0].id;
+    ws.switchTo("main");
+    ws.switchTo("sample");
+    assert.equal(stayDay(ws.current, ws.current.today(), NO_CHANNEL_RUNTIME).arrivals[0].id, firstId);
+    ws.close();
+    c.set("2030-12-31T16:01:00Z"); // New year in Kuala Lumpur, same UTC day.
+    ws = new Workspaces({ rootDir: root, appVersion: "t", now: c.now });
+    try {
+      assert.equal(getProperty(ws.current, realProperty).id, realProperty);
+      ws.switchTo("sample");
+      assert.equal(ws.current.today(), "2031-01-01");
+      const refreshed = stayDay(ws.current, ws.current.today(), NO_CHANNEL_RUNTIME);
+      assert.notEqual(refreshed.arrivals[0].id, firstId);
+      assert.ok(refreshed.turnovers.some((t) => t.late));
+      const tomorrow = stayDay(ws.current, addDays(ws.current.today(), 1), NO_CHANNEL_RUNTIME);
+      assert.ok(tomorrow.arrivals.some((r) => r.guestName === "Lim Wei Jie (sample)"));
+      c.advanceDays(1);
+      ws.switchTo("sample");
+      assert.ok(stayDay(ws.current, ws.current.today(), NO_CHANNEL_RUNTIME).arrivals.length > 0);
+    } finally {
+      ws.close();
+    }
   });
 });

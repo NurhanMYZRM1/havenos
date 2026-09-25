@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { addDays } from "../../lib/domain/dates";
 import { DEFAULT_TURNOVER_CHECKLIST } from "../../lib/domain/short-stay";
 import { closeCore } from "../core/context";
 import { AppError } from "../core/errors";
@@ -7,6 +8,8 @@ import { importFiles } from "../core/services/attachments";
 import { cancelReservation, changeReservationDates, updateReservationDetails } from "../core/services/reservations";
 import { validateTurnoverUpdate } from "../core/services/stay-validate";
 import { getTurnover, listTurnovers, updateTurnover } from "../core/services/turnovers";
+import { stayDay } from "../core/services/stay-views";
+import { NO_CHANNEL_RUNTIME } from "../core/services/stay-channels";
 import { clock, makeCore, seedProperty, TINY_PNG } from "./helpers";
 import { addConnection, stay, turnoverIdFor } from "./stays-helpers";
 
@@ -72,6 +75,32 @@ describe("turnovers follow their reservation", () => {
 });
 
 describe("turnover computed fields", () => {
+  it("reads 2,000 reservations with one windowed next-arrival query", () => {
+    const core = makeCore();
+    try {
+      const p = seedProperty(core);
+      const ids: string[] = [];
+      core.db.tx(() => {
+        for (let i = 0; i < 2000; i++) {
+          ids.push(stay(core, { spaceId: p.unitA2, checkIn: addDays(core.today(), i), checkOut: addDays(core.today(), i + 1) }));
+        }
+      });
+      const started = performance.now();
+      const items = listTurnovers(core, { from: null, to: null, status: "all", propertyId: null });
+      const listMs = performance.now() - started;
+      assert.equal(items.length, 2000);
+      for (let i = 0; i < 1999; i++) assert.equal(items[i].nextCheckIn?.reservationId, ids[i + 1]);
+      assert.equal(items[1999].nextCheckIn, null);
+      assert.ok(listMs < 2000, `Turnover list took ${listMs.toFixed(0)}ms`);
+      const dayStarted = performance.now();
+      const day = stayDay(core, addDays(core.today(), 1000), NO_CHANNEL_RUNTIME);
+      assert.ok(day.turnovers.length > 0);
+      assert.ok(performance.now() - dayStarted < 2000, "Day view must stay responsive with 2,000 stays");
+    } finally {
+      closeCore(core);
+    }
+  });
+
   it("finds the next check-in on the same or an overlapping space, the window, late and unassigned", () => {
     const c = clock();
     const core = makeCore(undefined, c.now);

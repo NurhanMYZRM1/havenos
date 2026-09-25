@@ -5,7 +5,7 @@ import { ChannelSyncError } from "./channels";
 /**
  * A small, defensive reader for the subset of RFC 5545 (iCalendar) that
  * booking calendars use: VEVENTs with all-day or timed start/end. It never
- * expands recurrence rules (booking feeds don't use them) and skips anything
+ * expands recurrence rules; feeds with them are rejected explicitly. It skips anything
  * it can't read instead of failing the whole feed — except a body that isn't
  * a calendar at all, which is rejected so a login page or an error page can
  * never be mistaken for "no bookings".
@@ -215,6 +215,9 @@ export function parseIcal(body: string, maxEvents = MAX_FEED_EVENTS): IcalEvent[
       case "RECURRENCE-ID":
         draft.recurrenceId = line.value.trim();
         break;
+      case "RRULE":
+      case "RDATE":
+        throw new ChannelSyncError("unsupported_recurrence");
       case "DTSTART":
         draft.start = readIcalDate(line.value);
         break;

@@ -15,9 +15,7 @@ import { allSpacePaths } from "./shared";
  * Attribution
  *  - booking_value, cleaning_fee, channel_fee, tax and adjustment rows count
  *    in the linked stay's check-in month (else their own date);
- *  - payouts and expenses count on their own date; imported adjustments also
- *    count as payouts on their own date, because the channel netted them into
- *    a transfer (e.g. an Airbnb resolution deducted from the next payout);
+ *  - payouts and expenses count on their own date;
  *  - turnover costs on the turnover's due date, maintenance actual costs on
  *    the completion date — both 'entered'. Maintenance counts only when it is
  *    on a space with short-stay activity (an active channel connection or a
@@ -26,11 +24,11 @@ import { allSpacePaths } from "./shared";
  *  - Voided ledger rows are ignored.
  *
  * Figures
- *  - bookingValue = booking values + adjustments (signed). Booking value is
- *    what the guest paid for the stay, including the cleaning fee and any tax
+ *  - bookingValue contains booking values; adjustments are shown separately.
+ *    Booking value is what the guest paid, including the cleaning fee and tax
  *    the host collects; cleaningFees is shown as a part of it and never added
  *    again.
- *  - estimatedNet = bookingValue − channelFees − taxes − expenses.
+ *  - estimatedNet = bookingValue + adjustments − channelFees − taxes − expenses.
  *  - stays: non-cancelled reservations checking in within the period; nights:
  *    their booked nights inside the period (clipped). occupancyPct (space rows
  *    only) = nights ÷ (nights in range − nights under manual blocks on that
@@ -42,7 +40,7 @@ import { allSpacePaths } from "./shared";
 
 export const MAX_REPORT_MONTHS = 24;
 
-type FigureName = "bookingValue" | "cleaningFees" | "channelFees" | "taxes" | "payouts" | "expenses";
+type FigureName = "bookingValue" | "cleaningFees" | "channelFees" | "taxes" | "payouts" | "adjustments" | "expenses";
 type Source = "imported" | "entered";
 
 interface Acc {
@@ -67,7 +65,7 @@ interface Where {
 
 const EARNINGS: Partial<Record<LedgerKind, FigureName>> = {
   booking_value: "bookingValue",
-  adjustment: "bookingValue",
+  adjustment: "adjustments",
   cleaning_fee: "cleaningFees",
   channel_fee: "channelFees",
   tax: "taxes",
@@ -82,7 +80,7 @@ function newAcc(key: string, label: string, isSpace = false, spaceId: string | n
     spaceId,
     stays: 0,
     nights: 0,
-    figures: { bookingValue: zero(), cleaningFees: zero(), channelFees: zero(), taxes: zero(), payouts: zero(), expenses: zero() },
+    figures: { bookingValue: zero(), cleaningFees: zero(), channelFees: zero(), taxes: zero(), payouts: zero(), adjustments: zero(), expenses: zero() },
     avgValue: 0,
     avgNights: 0,
     staysWithoutMoney: 0,
@@ -118,12 +116,12 @@ export function performanceReport(
       case "space":
         if (!w.spaceId) {
           const key = `property:${w.propertyId}`;
-          return [key, () => newAcc(key, t("errors.money.label.noSpace", { property: propertyNames.get(w.propertyId) ?? "" }))];
+          return [key, () => newAcc(key, t("shortStays.performance.noSpace", { property: propertyNames.get(w.propertyId) ?? "" }))];
         }
         return [w.spaceId, () => newAcc(w.spaceId!, `${propertyNames.get(w.propertyId) ?? ""} · ${paths.get(w.spaceId!) ?? ""}`, true, w.spaceId)];
       case "channel": {
         const key = w.channel ?? "none";
-        return [key, () => newAcc(key, w.channel ? t(`errors.money.label.channel.${w.channel}`) : t("errors.money.label.noChannel"))];
+        return [key, () => newAcc(key, w.channel ? t(`shortStays.enums.reservationChannel.${w.channel}`) : t("shortStays.performance.noChannel"))];
       }
       default:
         return [w.month, () => newAcc(w.month, formatMonth(w.month))];
@@ -178,7 +176,7 @@ export function performanceReport(
       if (l.kind === "booking_value" && l.reservation_id) bookingByStay.set(l.reservation_id, (bookingByStay.get(l.reservation_id) ?? 0) + l.amount_sen);
     }
     const onDate = inRange(l.occurred_on);
-    if (onDate && (l.kind === "payout" || (l.kind === "adjustment" && l.source === "imported"))) acc(where(l.occurred_on)).figures.payouts[l.source] += l.amount_sen;
+    if (onDate && l.kind === "payout") acc(where(l.occurred_on)).figures.payouts[l.source] += l.amount_sen;
     if (onDate && l.kind === "expense") acc(where(l.occurred_on)).figures.expenses[l.source] += l.amount_sen;
   }
 
@@ -276,8 +274,9 @@ export function performanceReport(
       channelFees: figure(f.channelFees),
       taxes: figure(f.taxes),
       payouts: figure(f.payouts),
+      adjustments: figure(f.adjustments),
       expenses: figure(f.expenses),
-      estimatedNetSen: total("bookingValue") - total("channelFees") - total("taxes") - total("expenses"),
+      estimatedNetSen: total("bookingValue") + total("adjustments") - total("channelFees") - total("taxes") - total("expenses"),
       averageNightlySen: a.avgNights > 0 ? Math.round(a.avgValue / a.avgNights) : null,
       staysWithoutMoney: a.staysWithoutMoney,
     };
@@ -308,7 +307,7 @@ export function performanceReport(
     return a.label.localeCompare(b.label);
   });
 
-  const totals = newAcc("total", t("errors.money.label.total"));
+  const totals = newAcc("total", t("shortStays.performance.total"));
   for (const a of accs) {
     totals.stays += a.stays;
     totals.nights += a.nights;

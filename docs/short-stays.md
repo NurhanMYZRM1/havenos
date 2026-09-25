@@ -100,7 +100,14 @@ what HavenOS already holds:
   ended are left alone.
 - **Feed suddenly lost most of its bookings.** For example, HavenOS got an
   empty or cut-off response. The whole sync is rejected, nothing changes, and
-  Settings offers **Apply anyway**.
+  Settings offers **Apply anyway**. The guard also rejects a loss of at least
+  three future bookings, even when that is less than half. It rejects a loss
+  of half or more when there were at least three future bookings, and an empty
+  feed after previously having future bookings.
+- **Recurring events.** Calendars containing `RRULE` or `RDATE` are rejected
+  as unsupported, with a message on the connection page. No partial import is
+  applied. Use a feed with a separate event for each booking. Airbnb's normal
+  export does not require recurrence expansion.
 - **Blocked on Airbnb.** Shown on the calendar for information only. HavenOS
   can't tell why Airbnb blocked the dates (your own block, preparation time,
   advance notice, another calendar), so they don't stop tenancies.
@@ -117,6 +124,17 @@ what HavenOS already holds:
   booking. HavenOS cancels those (keeping their history) and applies the Airbnb
   booking. Tenancies are never changed for you.
 
+The connection page recomputes conflicts when read. After fixing a clashing
+record elsewhere, reopen or refresh the connection to see the current details
+and retry immediately. **Recent syncs** shows a sanitized error name and
+message when a run fails. Calendar links, query strings and secret values are
+removed before those diagnostics are saved or logged.
+
+A space cannot be archived while a non-removed calendar connection points to
+it or to a containing/contained space. This includes paused connections. Move
+or remove the connection under **Settings → Channel connections** first; the
+archive error includes a link there.
+
 ## Operations
 
 - **Turnovers.** Every stay gets a cleaning/inspection task due on its check-out
@@ -127,7 +145,13 @@ what HavenOS already holds:
   cancelled.
 - **Availability blocks.** Maintenance, personal use or owner stays. They block
   tenancies and reservations like any booking and appear in *Dates to block on
-  Airbnb* until Airbnb shows them blocked.
+  Airbnb* until Airbnb shows them blocked. Calendar links open a block directly
+  by ID, including older or cancelled blocks.
+- **Calendar.** Choose 14, 30 or 60 days. Both the start and end day are
+  included. Cancelled reservations are hidden unless requested. Tab into the
+  day cells, use arrow keys (or Home/End) to choose a date, and press Enter to
+  open the reservation/block choice. A visible hint identifies horizontal
+  scrolling for longer ranges.
 - **Today view.** Arrivals, departures, in-house guests, turnovers (including
   overdue ones), open maintenance on short-stay spaces, and alerts.
 - **Alerts.** Conflicts, bookings missing from a feed, unassigned turnovers due
@@ -135,11 +159,27 @@ what HavenOS already holds:
   the next 2 days on a space with open *critical* maintenance, and dates not yet
   blocked on Airbnb.
 - **Performance.** Booking value, cleaning fees, channel fees, taxes, payouts,
-  expenses and estimated net, by property, space, channel or month. Each
-  figure keeps **Imported** (from an Airbnb CSV) and **Entered** (typed by you)
-  apart. Expenses include turnover costs and completed maintenance on
-  short-stay spaces. The net figure is an estimate, not accounting. There is no
-  pricing advice: HavenOS has no market data.
+  adjustments, expenses and estimated net, by property, space, channel or
+  month. Each figure keeps **Imported** (from an Airbnb CSV) and **Entered** (typed by you)
+  apart. The table shows totals; expand a row for all figures and their
+  Imported/Entered breakdown. Adjustments are separate from booking value and
+  payouts. Estimated net is booking value + adjustments − channel fees − taxes
+  − expenses. Linked adjustments count in the stay's check-in month; unlinked
+  ones count on their own date. Expenses include turnover costs and completed
+  maintenance on short-stay spaces. The net figure is an estimate, not
+  accounting. There is no pricing advice: HavenOS has no market data.
+- **CSV corrections.** A moved payout date in a later Paid export updates the
+  existing ledger entry and records its previous date in the description.
+  Legacy date-based import references are recognised on reimport. Preview
+  warnings are translated in the UI. If a file is not recognised, the error
+  lists unfamiliar column headers (not guest rows), to help add new aliases.
+  Separate partial exports containing otherwise identical lines with no
+  confirmation code or transaction reference cannot be distinguished reliably;
+  include those identifiers when available.
+- **Sample workspace.** When opened on a new Kuala Lumpur day, the fictional
+  workspace resets so arrivals and late turnovers remain relative to today.
+  Same-day edits persist; real records are unaffected. Development's
+  `HAVENOS_FAKE_NOW` uses the same clock.
 
 ## Approved API path (if Airbnb invites HavenOS)
 
@@ -180,7 +220,7 @@ guidelines) add their own rules. Check what applies to each building.
 
 | Area | Files |
 |---|---|
-| Schema (migration 2) | `desktop/core/schema.ts` |
+| Schema (migration 2, diagnostics migration 3) | `desktop/core/schema.ts` |
 | Availability rule (tenancies, reservations, blocks) | `desktop/core/services/availability.ts` + triggers |
 | Reservation writes and history | `desktop/core/services/reservations.ts` |
 | Calendar adapters and parser | `desktop/core/integrations/` |

@@ -81,6 +81,30 @@ describe("schema 2 upgrade keeps existing records", () => {
   });
 });
 
+describe("schema 3 sync diagnostics", () => {
+  it("upgrades a schema-2 database without changing existing connection or sync history", () => {
+    const dir = tempDir();
+    const old = new Db(path.join(dir, DB_FILE));
+    old.exec(MIGRATIONS[0].sql);
+    old.exec(MIGRATIONS[1].sql);
+    old.exec("PRAGMA user_version = 2");
+    const now = FIXED_NOW.toISOString();
+    old.run("INSERT INTO properties (id, name, property_type, address_line1, postcode, city, state, created_at, updated_at) VALUES ('p1', 'Old Place', 'condominium', '1 Jalan', '50450', 'KL', 'KUL', ?, ?)", [now, now]);
+    old.run("INSERT INTO spaces (id, property_id, kind, unit_id, label, rental_mode, created_at, updated_at) VALUES ('u1', 'p1', 'unit', 'u1', 'A-1', 'whole_unit', ?, ?)", [now, now]);
+    old.run("INSERT INTO channel_connections (id, channel, method, name, space_id, property_id, created_at, updated_at) VALUES ('c1', 'airbnb', 'ical', 'Calendar', 'u1', 'p1', ?, ?)", [now, now]);
+    old.run("INSERT INTO channel_sync_runs (id, connection_id, trigger, started_at, outcome, error_code) VALUES ('sync1', 'c1', 'manual', ?, 'failed', 'internal')", [now]);
+    old.close();
+    const core = makeCore(dir);
+    const row = core.db.get<{ id: string; outcome: string; error_code: string; diagnostic: string | null }>("SELECT id, outcome, error_code, diagnostic FROM channel_sync_runs");
+    assert.deepEqual({ ...row }, { id: "sync1", outcome: "failed", error_code: "internal", diagnostic: null });
+    assert.equal(core.db.get<{ n: number }>("SELECT COUNT(*) AS n FROM channel_connections")!.n, 1);
+    assert.equal(core.db.get<{ user_version: number }>("PRAGMA user_version")!.user_version, SCHEMA_VERSION);
+    assert.deepEqual(core.db.all("PRAGMA foreign_key_check"), []);
+    assert.ok(fs.readdirSync(path.join(dir, "backups")).some((f) => f.startsWith("pre-upgrade-v2")));
+    closeCore(core);
+  });
+});
+
 describe("availability blocks share the overlap rule", () => {
   it("a block rejects tenancies and reservations across the space tree, and the reverse", () => {
     const core = makeCore();

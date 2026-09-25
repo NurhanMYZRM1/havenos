@@ -68,13 +68,13 @@
  */
 
 import crypto from "node:crypto";
-import type { StayImportKind } from "../../../lib/api/contract";
+import type { CsvImportWarning, StayImportKind } from "../../../lib/api/contract";
 import { addDays, daysBetween, isIsoDate, type IsoDate } from "../../../lib/domain/dates";
 import type { LedgerKind } from "../../../lib/domain/enums";
 import { formatRM, MAX_SEN } from "../../../lib/domain/money";
-import { t, type MessageKey, type MessageParams } from "../../../lib/i18n";
+import type { MessageKey, MessageParams } from "../../../lib/i18n";
 import { AppError } from "../errors";
-import { mapColumns, parseCsv } from "./csv";
+import { mapColumns, normalizeHeader, parseCsv } from "./csv";
 
 export interface MoneyLine {
   kind: LedgerKind;
@@ -82,6 +82,8 @@ export interface MoneyLine {
   occurredOn: IsoDate;
   /** Idempotency key: the same line in a later or overlapping export gives the same key. */
   externalRef: string;
+  /** Previous app versions included the payout date in the key. Used only in main during import. */
+  legacyRefForDate: (date: IsoDate) => string;
 }
 
 export interface AirbnbRow {
@@ -107,10 +109,10 @@ export interface ParsedAirbnbFile {
   rowsSkipped: number;
   rows: AirbnbRow[];
   currency: string | null;
-  warnings: string[];
+  warnings: CsvImportWarning[];
 }
 
-const warn = (key: MessageKey, params?: MessageParams) => t(key, params);
+const warn = (key: MessageKey, params?: MessageParams): CsvImportWarning => ({ key, params });
 
 // ── Values ─────────────────────────────────────────────────────────────────
 
@@ -244,7 +246,7 @@ function has<F extends string>(cols: Partial<Record<F, number>>, ...fields: F[])
 class Problems {
   private shown = 0;
   private hidden = 0;
-  constructor(private readonly out: string[], private readonly limit = 5) {}
+  constructor(private readonly out: CsvImportWarning[], private readonly limit = 5) {}
   add(key: MessageKey, params: MessageParams) {
     if (this.shown < this.limit) {
       this.out.push(warn(key, params));
@@ -252,7 +254,7 @@ class Problems {
     } else this.hidden++;
   }
   flush() {
-    if (this.hidden) this.out.push(warn("errors.money.warn.moreProblems", { n: this.hidden }));
+    if (this.hidden) this.out.push(warn("shortStays.import.warn.moreProblems", { n: this.hidden }));
   }
 }
 
@@ -275,6 +277,9 @@ export function parseAirbnbCsv(text: string, today: IsoDate): ParsedAirbnbFile {
     if (!body.length) throw new AppError("VALIDATION", "errors.money.emptyCsv");
     return parseReservations(body, header.length, res);
   }
+  const knownHeaders = new Set([...Object.values(TX_COLUMNS), ...Object.values(RES_COLUMNS)].flat().map(normalizeHeader));
+  const unknownHeaders = header.filter((name) => !knownHeaders.has(normalizeHeader(name))).map((name) => clean(name, 120));
+  if (unknownHeaders.length) throw new AppError("VALIDATION", "errors.money.notAirbnbCsvHeaders", { params: { headers: unknownHeaders.join(", ") } });
   throw new AppError("VALIDATION", "errors.money.notAirbnbCsv");
 }
 
@@ -294,11 +299,12 @@ function stayDates(start: string, end: string, nights: string): { checkIn: IsoDa
 }
 
 function parseTransactions(body: string[][], cols: Partial<Record<TxField, number>>, today: IsoDate): ParsedAirbnbFile {
-  const warnings: string[] = [];
+  const warnings: CsvImportWarning[] = [];
   const problems = new Problems(warnings);
   const cell = (row: string[], f: TxField) => (cols[f] === undefined ? "" : (row[cols[f]!] ?? "").trim());
   const rows: AirbnbRow[] = [];
-  const seen = new Map<string, number>();
+  const identities = new Map<string, { date: IsoDate; money: MoneyLine[] }[]>();
+  const legacySeen = new Map<string, number>();
   const otherCurrencies = new Map<string, number>();
   const unknownTypes = new Map<string, number>();
   const currencies = new Set<string>();
@@ -323,7 +329,7 @@ function parseTransactions(body: string[][], cols: Partial<Record<TxField, numbe
       const raw = cell(row, f);
       const parsed = parseAirbnbAmount(raw);
       if (!parsed.ok) {
-        problems.add("errors.money.warn.badAmount", { row: rowNumber, value: raw.slice(0, 40) });
+        problems.add("shortStays.import.warn.badAmount", { row: rowNumber, value: raw.slice(0, 40) });
         skipped++;
         return;
       }
@@ -339,19 +345,19 @@ function parseTransactions(body: string[][], cols: Partial<Record<TxField, numbe
     }
     const rawDate = cell(row, "date");
     if (!rawDate) {
-      problems.add("errors.money.warn.missingDate", { row: rowNumber });
+      problems.add("shortStays.import.warn.missingDate", { row: rowNumber });
       skipped++;
       return;
     }
     const date = parseAirbnbDate(rawDate);
     if (!date) {
-      problems.add("errors.money.warn.badDate", { row: rowNumber, value: rawDate.slice(0, 40) });
+      problems.add("shortStays.import.warn.badDate", { row: rowNumber, value: rawDate.slice(0, 40) });
       skipped++;
       return;
     }
     const stay = stayDates(cell(row, "start"), cell(row, "end"), cell(row, "nights"));
     if (stay.bad !== null) {
-      problems.add("errors.money.warn.badDate", { row: rowNumber, value: stay.bad.slice(0, 40) });
+      problems.add("shortStays.import.warn.badDate", { row: rowNumber, value: stay.bad.slice(0, 40) });
       skipped++;
       return;
     }
@@ -363,24 +369,28 @@ function parseTransactions(body: string[][], cols: Partial<Record<TxField, numbe
     const upcoming = date > today;
     if (upcoming) upcomingRows++;
 
-    // Idempotency key: the line's own facts, never the listing title, guest name
-    // or free text (those can be renamed or translated between exports).
-    const normalized = [
+    // The payout date can move between Paid exports. Keep it out of the key,
+    // as with listing titles and guest names, which can be renamed.
+    const facts = [
       type === "unknown" ? typeLabel.toLowerCase() : type,
-      date,
       code ?? "",
       reference,
       stay.checkIn ?? "",
       stay.checkOut ?? "",
       currency,
       ...(["amount", "serviceFee", "fastPayFee", "cleaningFee", "gross", "occupancyTax"] as const).map((f) => String(amounts[f] ?? "")),
-    ].join("|");
-    const occurrence = (seen.get(normalized) ?? 0) + 1;
-    seen.set(normalized, occurrence);
-    const hash = sha1(`${normalized}#${occurrence}`);
+    ];
+    const normalized = facts.join("|");
+    const legacyFacts = (on: IsoDate) => [facts[0], on, ...facts.slice(1)].join("|");
+    const legacyNormalized = legacyFacts(date);
+    const legacyOccurrence = (legacySeen.get(legacyNormalized) ?? 0) + 1;
+    legacySeen.set(legacyNormalized, legacyOccurrence);
     const refBase = `airbnb:${code ?? (reference || "line")}`;
     const money: MoneyLine[] = [];
-    const add = (kind: LedgerKind, amountSen: number) => money.push({ kind, amountSen, occurredOn: date, externalRef: `${refBase}:${kind}:${hash}` });
+    const add = (kind: LedgerKind, amountSen: number) => money.push({
+      kind, amountSen, occurredOn: date, externalRef: `${refBase}:${kind}`,
+      legacyRefForDate: (on) => `${refBase}:${kind}:${sha1(`${legacyFacts(on)}#${legacyOccurrence}`)}`,
+    });
 
     if (!upcoming) {
       const amount = amounts.amount ?? null;
@@ -421,15 +431,27 @@ function parseTransactions(body: string[][], cols: Partial<Record<TxField, numbe
       upcoming,
       money,
     });
+    const group = identities.get(normalized) ?? [];
+    group.push({ date, money });
+    identities.set(normalized, group);
   });
 
+  // Airbnb can reorder exports. Repeated otherwise-identical lines keep
+  // their occurrence numbers when their date order stays the same.
+  for (const [identity, group] of identities) {
+    group.sort((a, b) => a.date.localeCompare(b.date));
+    group.forEach(({ money }, index) => {
+      const hash = sha1(`${identity}#${index + 1}`);
+      for (const line of money) line.externalRef += `:${hash}`;
+    });
+  }
   problems.flush();
-  if (payoutRows) warnings.push(warn("errors.money.warn.payoutRows", { n: payoutRows }));
-  for (const [currency, n] of otherCurrencies) warnings.push(warn("errors.money.warn.otherCurrency", { n, currency }));
-  if (cols.currency === undefined) warnings.push(warn("errors.money.warn.noCurrencyColumn"));
-  for (const [type, n] of unknownTypes) warnings.push(warn("errors.money.warn.unknownType", { n, type }));
-  if (upcomingRows) warnings.push(warn("errors.money.warn.upcoming", { n: upcomingRows }));
-  if (remittedSen) warnings.push(warn("errors.money.warn.remittedTax", { amount: formatRM(remittedSen) }));
+  if (payoutRows) warnings.push(warn("shortStays.import.warn.payoutRows", { n: payoutRows }));
+  for (const [currency, n] of otherCurrencies) warnings.push(warn("shortStays.import.warn.otherCurrency", { n, currency }));
+  if (cols.currency === undefined) warnings.push(warn("shortStays.import.warn.noCurrencyColumn"));
+  for (const [type, n] of unknownTypes) warnings.push(warn("shortStays.import.warn.unknownType", { n, type }));
+  if (upcomingRows) warnings.push(warn("shortStays.import.warn.upcoming", { n: upcomingRows }));
+  if (remittedSen) warnings.push(warn("shortStays.import.warn.remittedTax", { amount: formatRM(remittedSen) }));
 
   return {
     kind: "airbnb_transactions",
@@ -442,7 +464,7 @@ function parseTransactions(body: string[][], cols: Partial<Record<TxField, numbe
 }
 
 function parseReservations(body: string[][], width: number, cols: Partial<Record<ResField, number>>): ParsedAirbnbFile {
-  const warnings: string[] = [warn("errors.money.warn.noMoneyInReservations")];
+  const warnings: CsvImportWarning[] = [warn("shortStays.import.warn.noMoneyInReservations")];
   const problems = new Problems(warnings);
   const cell = (row: string[], f: ResField) => (cols[f] === undefined ? "" : (row[cols[f]!] ?? "").trim());
   const rows: AirbnbRow[] = [];
@@ -452,14 +474,14 @@ function parseReservations(body: string[][], width: number, cols: Partial<Record
   body.forEach((row, index) => {
     const rowNumber = index + 2;
     if (row.length > width) {
-      problems.add("errors.money.warn.extraColumns", { row: rowNumber });
+      problems.add("shortStays.import.warn.extraColumns", { row: rowNumber });
       skipped++;
       return;
     }
     const code = readCode(cell(row, "code"));
     const stay = stayDates(cell(row, "start"), cell(row, "end"), cell(row, "nights"));
     if (stay.bad !== null) {
-      problems.add("errors.money.warn.badDate", { row: rowNumber, value: stay.bad.slice(0, 40) });
+      problems.add("shortStays.import.warn.badDate", { row: rowNumber, value: stay.bad.slice(0, 40) });
       skipped++;
       return;
     }

@@ -45,14 +45,10 @@ interface TurnoverJoinedRow extends TurnoverRow {
   channel: ReservationChannel;
   photo_count: number;
   next_id: string | null;
-}
-
-interface NextRow {
-  id: string;
-  check_in: string;
-  check_in_time: string | null;
-  connection_check_in_time: string | null;
-  guest_name: string;
+  next_check_in: string | null;
+  next_check_in_time: string | null;
+  next_connection_check_in_time: string | null;
+  next_guest_name: string | null;
 }
 
 // ── Keeping turnovers in step with reservations ─────────────────────────────
@@ -138,17 +134,44 @@ export function syncTurnover(core: Core, reservationId: string): void {
 
 // ── Reading ─────────────────────────────────────────────────────────────────
 
-const SELECT = `
+/** One ordered timeline per space, including arrivals on its parents/children. */
+function selectTurnovers(where: string): string {
+  return `WITH selected AS MATERIALIZED (
+    SELECT t.* FROM turnovers t ${where ? `WHERE ${where}` : ""}
+    ORDER BY t.due_date LIMIT 5000
+  ), target_spaces AS (
+    SELECT DISTINCT space_id FROM selected
+  ), arrivals AS MATERIALIZED (
+    SELECT target.space_id, n.id, n.check_in, n.check_in_time, n.guest_name,
+      c.check_in_time AS connection_check_in_time,
+      ROW_NUMBER() OVER (PARTITION BY target.space_id
+        ORDER BY n.check_in, COALESCE(n.check_in_time, '99:99'), n.created_at, n.id) AS seq
+    FROM target_spaces target
+    JOIN spaces b ON b.id = target.space_id
+    JOIN spaces a ON ${SPACES_OVERLAP}
+    JOIN reservations n ON n.space_id = a.id AND n.status <> 'cancelled'
+    LEFT JOIN channel_connections c ON c.id = n.connection_id
+  ), timeline AS (
+    SELECT space_id, due_date AS date, 0 AS kind, id AS turnover_id, NULL AS seq FROM selected
+    UNION ALL
+    SELECT space_id, check_in, 1, NULL, seq FROM arrivals
+  ), upcoming AS (
+    SELECT turnover_id, MIN(seq) OVER (PARTITION BY space_id ORDER BY date, kind, seq
+      ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) AS next_seq
+    FROM timeline
+  )
   SELECT t.*, p.name AS property_name, r.guest_name, r.channel,
     (SELECT COUNT(*) FROM attachments a WHERE a.turnover_id = t.id) AS photo_count,
-    (SELECT n.id FROM reservations n
-       JOIN spaces a ON a.id = n.space_id
-       JOIN spaces b ON b.id = t.space_id
-     WHERE n.status <> 'cancelled' AND n.id <> t.reservation_id AND n.check_in >= t.due_date AND ${SPACES_OVERLAP}
-     ORDER BY n.check_in, COALESCE(n.check_in_time, '99:99'), n.created_at LIMIT 1) AS next_id
-  FROM turnovers t
+    n.id AS next_id, n.check_in AS next_check_in, n.check_in_time AS next_check_in_time,
+    n.connection_check_in_time AS next_connection_check_in_time, n.guest_name AS next_guest_name
+  FROM selected t
   JOIN properties p ON p.id = t.property_id
-  JOIN reservations r ON r.id = t.reservation_id`;
+  JOIN reservations r ON r.id = t.reservation_id
+  JOIN upcoming u ON u.turnover_id = t.id
+  LEFT JOIN arrivals first ON first.space_id = t.space_id AND first.seq = u.next_seq
+  LEFT JOIN arrivals n ON n.space_id = t.space_id
+    AND n.seq = u.next_seq + CASE WHEN first.id = t.reservation_id THEN 1 ELSE 0 END`;
+}
 
 function minutes(time: string): number {
   const [h, m] = time.split(":").map(Number);
@@ -178,32 +201,14 @@ function parseChecklist(raw: string): ChecklistItem[] {
   }
 }
 
-function loadNext(core: Core, ids: readonly string[]): Map<string, NextRow> {
-  const out = new Map<string, NextRow>();
-  const unique = [...new Set(ids)];
-  for (let i = 0; i < unique.length; i += 500) {
-    const chunk = unique.slice(i, i + 500);
-    for (const row of core.db.all<NextRow>(
-      `SELECT r.id, r.check_in, r.check_in_time, c.check_in_time AS connection_check_in_time, r.guest_name
-       FROM reservations r LEFT JOIN channel_connections c ON c.id = r.connection_id
-       WHERE r.id IN (${chunk.map(() => "?").join(",")})`,
-      chunk,
-    )) {
-      out.set(row.id, row);
-    }
-  }
-  return out;
-}
-
 function toItems(core: Core, rows: readonly TurnoverJoinedRow[]): TurnoverItem[] {
   if (!rows.length) return [];
   const paths = allSpacePaths(core);
-  const next = loadNext(core, rows.map((r) => r.next_id).filter((id): id is string => !!id));
   const now = nowStamp(core);
   const today = core.today();
   return rows.map((r): TurnoverItem => {
-    const n = r.next_id ? next.get(r.next_id) ?? null : null;
-    const nextTime = n ? n.check_in_time ?? n.connection_check_in_time ?? null : null;
+    const n = r.next_id && r.next_check_in ? { id: r.next_id, check_in: r.next_check_in, guest_name: r.next_guest_name ?? "" } : null;
+    const nextTime = n ? r.next_check_in_time ?? r.next_connection_check_in_time ?? null : null;
     const effectiveNextTime = nextTime ?? DEFAULT_CHECK_IN_TIME;
     const open = r.status !== "done" && r.status !== "skipped";
     const windowMinutes = n ? daysBetween(r.due_date, n.check_in) * 1440 + minutes(effectiveNextTime) - minutes(r.checkout_time) : null;
@@ -248,7 +253,7 @@ function sortItems(items: TurnoverItem[]): TurnoverItem[] {
 
 /** Turnovers matching a free-form WHERE clause (internal: used by the day view and alerts). */
 export function queryTurnovers(core: Core, where: string, params: Record<string, string | number | null> = {}): TurnoverItem[] {
-  const rows = core.db.all<TurnoverJoinedRow>(`${SELECT} ${where ? `WHERE ${where}` : ""} ORDER BY t.due_date LIMIT 5000`, params);
+  const rows = core.db.all<TurnoverJoinedRow>(selectTurnovers(where), params);
   return sortItems(toItems(core, rows));
 }
 
@@ -281,7 +286,7 @@ export function openTurnoversThrough(core: Core, through: IsoDate): TurnoverItem
 }
 
 export function getTurnover(core: Core, id: string): TurnoverDetail {
-  const row = core.db.get<TurnoverJoinedRow>(`${SELECT} WHERE t.id = ?`, [id]);
+  const row = core.db.get<TurnoverJoinedRow>(selectTurnovers("t.id = ?"), [id]);
   if (!row) throw notFound();
   const [item] = toItems(core, [row]);
   return { ...item, photos: listAttachments(core, { kind: "turnover", id }) };

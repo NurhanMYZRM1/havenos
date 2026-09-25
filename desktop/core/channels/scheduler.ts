@@ -3,6 +3,7 @@ import { CHANNEL_SYNC_INTERVAL_MINUTES } from "../../../lib/domain/short-stay";
 import type { Core } from "../context";
 import type { ChannelSecretStore, ChannelSyncControl, FeedFetcher } from "../integrations/channels";
 import { activeConnectionIds } from "./connections";
+import { safeSyncDiagnostic } from "./diagnostics";
 import { syncConnection, type SyncOutcome } from "./sync";
 
 /**
@@ -16,7 +17,7 @@ import { syncConnection, type SyncOutcome } from "./sync";
  *    exponentially (capped), with jitter, so a struggling or rate-limiting
  *    channel isn't hammered; the 20-minute cadence is otherwise kept.
  *  - A failure never stops the timer. Logs carry the connection id and the
- *    error code only — never the feed link.
+ *    error code and sanitized diagnostic — never the feed link.
  */
 
 export const MAX_CONCURRENT = 3;
@@ -189,12 +190,12 @@ export class ChannelScheduler implements ChannelSyncControl {
         trigger,
         acceptShrink,
       });
-    } catch {
-      outcome = { runId: null, outcome: "failed", errorCode: "internal", errorDetail: "", changed: false };
+    } catch (err) {
+      outcome = { runId: null, outcome: "failed", errorCode: "internal", errorDetail: "", diagnostic: safeSyncDiagnostic(err), changed: false };
     } finally {
       this.release();
     }
-    if (outcome.outcome === "failed" || outcome.outcome === "rejected") this.log(`[havenos] channel sync ${id}: ${outcome.errorCode ?? "internal"}`);
+    if (outcome.outcome === "failed" || outcome.outcome === "rejected") this.log(`[havenos] channel sync ${id}: ${outcome.errorCode ?? "internal"}${outcome.diagnostic ? ` — ${outcome.diagnostic}` : ""}`);
     this.noteBackoff(id, outcome);
     if (outcome.changed) {
       try {

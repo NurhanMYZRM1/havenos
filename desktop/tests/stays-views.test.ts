@@ -8,10 +8,10 @@ import type { HandlerContext } from "../core/handler-utils";
 import { stayHandlers } from "../core/handlers-stays";
 import { MemorySecretStore } from "../core/integrations/channels";
 import { seedSampleWorkspace } from "../core/sample";
-import { createBlock } from "../core/services/blocks";
+import { cancelBlock, createBlock } from "../core/services/blocks";
 import { createMaintenance } from "../core/services/maintenance";
 import { createPropertyFromPlan, getProperty } from "../core/services/properties";
-import { changeReservationDates, markReservationMissing } from "../core/services/reservations";
+import { cancelReservation, changeReservationDates, markReservationMissing } from "../core/services/reservations";
 import { stayAlerts } from "../core/services/stay-alerts";
 import { NO_CHANNEL_RUNTIME, type ChannelRuntime } from "../core/services/stay-channels";
 import { stayCalendar, stayDay } from "../core/services/stay-views";
@@ -59,6 +59,25 @@ describe("day view", () => {
 });
 
 describe("calendar", () => {
+  it("includes both boundary days and includes cancelled reservations only when requested", () => {
+    const core = makeCore();
+    const p = seedProperty(core);
+    const before = stay(core, { spaceId: p.unitA2, checkIn: "2026-09-18", checkOut: "2026-09-20" });
+    const first = stay(core, { spaceId: p.unitA2, checkIn: "2026-09-20", checkOut: "2026-09-21" });
+    const last = stay(core, { spaceId: p.unitA2, checkIn: "2026-09-30", checkOut: "2026-10-01" });
+    const after = stay(core, { spaceId: p.unitA2, checkIn: "2026-10-01", checkOut: "2026-10-02" });
+    const cancelled = stay(core, { spaceId: p.unitA2, checkIn: "2026-09-24", checkOut: "2026-09-26" });
+    cancelReservation(core, cancelled);
+    const params = { from: "2026-09-20", to: "2026-09-30", propertyId: p.propertyId };
+    const items = (includeCancelled?: boolean) => stayCalendar(core, { ...params, includeCancelled }, NO_CHANNEL_RUNTIME).rows.find((r) => r.spaceId === p.unitA2)!.items;
+    assert.deepEqual(items().map((r) => r.id), [first, last]);
+    assert.deepEqual(items(false).map((r) => r.id), [first, last]);
+    assert.deepEqual(items(true).map((r) => r.id), [first, cancelled, last]);
+    assert.equal(items(true).find((r) => r.id === cancelled)!.status, "cancelled");
+    assert.ok(!items(true).some((r) => r.id === before || r.id === after));
+    closeCore(core);
+  });
+
   it("builds rows with own and inherited items, channel events and tenancies", () => {
     const core = makeCore();
     const p = seedProperty(core);
@@ -201,12 +220,19 @@ describe("stay handlers", () => {
     fails(() => h["reservations.create"]({ spaceId: "../../etc", checkIn: "2026-10-01", checkOut: "2026-10-02", status: "confirmed", channel: "direct" }));
     fails(() => h["reservations.get"]({ id: 42 }));
     fails(() => h["blocks.create"]({ spaceId: p.unitA2, startDate: "2026-10-02", endDate: "2026-10-01", reason: "maintenance" }));
+    fails(() => h["blocks.get"]({ id: "../../etc" }));
+    fails(() => h["blocks.get"]({ id: "missing" }), "NOT_FOUND");
     fails(() => h["turnovers.list"]({ status: "whatever" }));
     fails(() => h["stays.day"]({}));
     fails(() => h["stays.calendar"]({ from: "2026-09-01", to: "2027-09-01" }));
+    fails(() => h["stays.calendar"]({ from: "2026-09-01", to: "2026-09-30", includeCancelled: "true" }));
     fails(() => h["reservations.get"]({ id: "missing" }), "NOT_FOUND");
     const created = h["reservations.create"]({ spaceId: p.unitA2, guestName: "IPC Guest", checkIn: "2026-10-01", checkOut: "2026-10-02", status: "confirmed", channel: "direct", notes: "" });
     assert.equal((await created).guestName, "IPC Guest");
+    const block = createBlock(core, { spaceId: p.unitA2, startDate: "2028-01-01", endDate: "2028-01-02", reason: "personal", maintenanceId: null, notes: "Far outside the current calendar" });
+    assert.deepEqual(await h["blocks.get"]({ id: block.id }), block);
+    const cancelledBlock = cancelBlock(core, block.id);
+    assert.deepEqual(await h["blocks.get"]({ id: block.id }), cancelledBlock);
     const cal = await h["stays.calendar"]({ from: "2026-09-20", to: "2026-10-10", propertyId: null });
     assert.equal(cal.rows.find((r) => r.spaceId === p.unitA2)!.connection!.health, "syncing");
     assert.deepEqual(await h["turnovers.list"]({}), await h["turnovers.list"]({ status: "open" }));

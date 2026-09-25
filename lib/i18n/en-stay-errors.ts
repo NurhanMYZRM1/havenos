@@ -15,19 +15,4 @@ export const stayErrors = {
   checklistLabel: "Each checklist item needs a label of up to 120 characters.",
   maintenanceOtherProperty: "Choose a maintenance request for the same property.",
   spaceUnavailable: "Choose a unit, room or bed that hasn't been archived.",
-  /** Display names used inside the messages above and as calendar labels. */
-  channel: {
-    direct: "Direct",
-    airbnb: "Airbnb",
-    booking_com: "Booking.com",
-    other: "the other channel",
-  },
-  blockReason: {
-    maintenance: "Maintenance",
-    personal: "Personal use",
-    owner_stay: "Owner stay",
-    other: "Blocked",
-  },
-  /** Calendar label for a booking whose guest name the channel doesn't share. */
-  guestFallback: "{channel} guest",
 } as const;

@@ -57,6 +57,11 @@
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0"
   },
+  "overrides": {
+    "next": {
+      "postcss": "8.5.28"
+    }
+  },
   "main": "dist-desktop/desktop/main/main.js",
   "author": {
     "name": "HavenOS"

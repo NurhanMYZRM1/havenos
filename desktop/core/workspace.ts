@@ -64,14 +64,22 @@ export class Workspaces {
   }
 
   switchTo(ws: Workspace, opts: { reset?: boolean } = {}) {
-    if (ws === this.name && !opts.reset) return;
+    const sampleIsCurrent = () => this.core.db.get<{ value: string }>("SELECT value FROM settings WHERE key = 'sampleSeedDate'")?.value === this.core.today();
+    if (ws === this.name && !opts.reset && (ws !== "sample" || sampleIsCurrent())) return;
     closeCore(this.core);
     if (ws === "sample") {
       const dir = this.dirFor("sample");
       const fresh = opts.reset || !fs.existsSync(path.join(dir, DB_FILE));
       if (fresh) fs.rmSync(dir, { recursive: true, force: true });
       this.core = this.open("sample");
-      if (fresh) seedSampleWorkspace(this.core);
+      // Sample edits last for the current KL day. Rebuild the fictional
+      // records on a new day so arrivals and late turnovers remain useful.
+      if (!fresh && !sampleIsCurrent()) {
+        closeCore(this.core);
+        fs.rmSync(dir, { recursive: true, force: true });
+        this.core = this.open("sample");
+        seedSampleWorkspace(this.core);
+      } else if (fresh) seedSampleWorkspace(this.core);
     } else {
       this.core = this.open("main");
     }

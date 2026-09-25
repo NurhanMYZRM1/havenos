@@ -226,6 +226,7 @@ export function seedSampleWorkspace(core: Core) {
   setSetting(core, "contactPhone", "+60123000000");
 
   seedShortStays(core);
+  core.db.run("INSERT OR REPLACE INTO settings (key, value) VALUES ('sampleSeedDate', ?)", [today]);
 }
 
 /**

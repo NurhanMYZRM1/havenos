@@ -1,13 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState, type CSSProperties, type MouseEvent } from "react";
+import { useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { EmptyIllustration } from "@/components/illustrations";
 import { Button } from "@/components/ui/button";
 import { Checkbox, Select } from "@/components/ui/field";
 import { Icon } from "@/components/ui/icons";
 import { EmptyState, LoadError, Loading } from "@/components/ui/layout";
-import type { AvailabilityBlock, CalendarItem, CalendarRow } from "@/lib/api/contract";
+import type { CalendarItem, CalendarRow } from "@/lib/api/contract";
 import { useApi } from "@/lib/api/hooks";
 import { addDays, daysBetween, isIsoDate, weekday, type IsoDate } from "@/lib/domain/dates";
 import { formatDate } from "@/lib/domain/format";
@@ -19,7 +19,7 @@ import { BlockDialog, QuickAddDialog, ReservationDialog } from "./stay-dialogs";
 export const CALENDAR_DAYS = 30;
 const DAY_W = 40;
 const LANE_H = 28;
-const LABEL_W = 240;
+const LABEL_W = 200;
 
 type Style = { box: CSSProperties; text: string };
 
@@ -218,39 +218,51 @@ export function CalendarTab({
 }) {
   const [propertyId, setPropertyId] = useState<string | null>(null);
   const [showCancelled, setShowCancelled] = useState(false);
+  const [dayCount, setDayCount] = useState(CALENDAR_DAYS);
+  const [focusedDay, setFocusedDay] = useState<string | null>(null);
+  const dayButtons = useRef(new Map<string, HTMLButtonElement>());
   const [dialog, setDialog] = useState<null | { kind: "reservation" | "block"; spaceId?: string; date?: IsoDate }>(null);
   const [quick, setQuick] = useState<null | { spaceId: string; spaceLabel: string; date: IsoDate; dateLabel: string }>(null);
-  const to = addDays(from, CALENDAR_DAYS - 1);
+  const to = addDays(from, dayCount - 1);
   const properties = useApi("properties.list", { includeArchived: false });
-  const calendar = useApi("stays.calendar", { from, to, propertyId });
+  const calendar = useApi("stays.calendar", { from, to, propertyId, includeCancelled: showCancelled });
 
-  // The block being edited: from the visible range, else look further.
-  const nearBlocks = useApi("blocks.list", { from, to, propertyId: null, includeCancelled: false }, { enabled: !!blockId });
-  const nearBlock = blockId ? (nearBlocks.data ?? []).find((b) => b.id === blockId) : undefined;
-  const allBlocks = useApi("blocks.list", { from: "2000-01-01", to: "2199-12-31", propertyId: null, includeCancelled: true }, { enabled: !!blockId && !!nearBlocks.data && !nearBlock });
-  const editBlock: AvailabilityBlock | null = nearBlock ?? (blockId ? ((allBlocks.data ?? []).find((b) => b.id === blockId) ?? null) : null);
-  const blockMissing = !!blockId && !!allBlocks.data && !editBlock;
+  const block = useApi("blocks.get", { id: blockId ?? "" }, { enabled: !!blockId });
+  const editBlock = blockId && block.data?.id === blockId ? block.data : null;
+  const blockMissing = !!blockId && !!block.error && !block.loading && !editBlock;
 
-  const days = useMemo(() => Array.from({ length: CALENDAR_DAYS }, (_, i) => addDays(from, i)), [from]);
+  const days = useMemo(() => Array.from({ length: dayCount }, (_, i) => addDays(from, i)), [from, dayCount]);
   const rows = calendar.data?.rows ?? [];
+  const activeDay = focusedDay && rows.some((row) => days.some((date) => `${row.spaceId}:${date}` === focusedDay)) ? focusedDay : rows[0] ? `${rows[0].spaceId}:${from}` : null;
 
-  const onTrackClick = (e: MouseEvent<HTMLDivElement>, row: CalendarRow) => {
-    if (e.target !== e.currentTarget) return;
-    const x = e.clientX - e.currentTarget.getBoundingClientRect().left;
-    const idx = Math.min(CALENDAR_DAYS - 1, Math.max(0, Math.floor(x / DAY_W)));
-    const date = days[idx];
+  const openDay = (row: CalendarRow, date: IsoDate) => {
     setQuick({ spaceId: row.spaceId, spaceLabel: row.spacePath, date, dateLabel: formatDate(date) });
+  };
+  const moveDay = (e: KeyboardEvent<HTMLButtonElement>, rowIndex: number, dayIndex: number) => {
+    let nextRow = rowIndex;
+    let nextDay = dayIndex;
+    if (e.key === "ArrowLeft") nextDay--;
+    else if (e.key === "ArrowRight") nextDay++;
+    else if (e.key === "ArrowUp") nextRow--;
+    else if (e.key === "ArrowDown") nextRow++;
+    else if (e.key === "Home") nextDay = 0;
+    else if (e.key === "End") nextDay = days.length - 1;
+    else return;
+    e.preventDefault();
+    const key = `${rows[Math.max(0, Math.min(rows.length - 1, nextRow))].spaceId}:${days[Math.max(0, Math.min(days.length - 1, nextDay))]}`;
+    setFocusedDay(key);
+    dayButtons.current.get(key)?.focus();
   };
 
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
         <div className="flex items-center gap-2" role="group" aria-label={t("shortStays.calendar.startFrom")}>
-          <Button size="sm" onClick={() => onFrom(addDays(from, -CALENDAR_DAYS))} icon={<Icon name="chevronLeft" size={14} />}>
+          <Button size="sm" onClick={() => onFrom(addDays(from, -dayCount))} icon={<Icon name="chevronLeft" size={14} />}>
             {t("shortStays.calendar.earlier")}
           </Button>
           <input type="date" className="control tnum !w-auto" value={from} aria-label={t("shortStays.calendar.startFrom")} onChange={(e) => isIsoDate(e.target.value) && onFrom(e.target.value)} />
-          <Button size="sm" onClick={() => onFrom(addDays(from, CALENDAR_DAYS))}>
+          <Button size="sm" onClick={() => onFrom(addDays(from, dayCount))}>
             {t("shortStays.calendar.later")}
             <Icon name="chevronRight" size={14} />
           </Button>
@@ -259,6 +271,9 @@ export function CalendarTab({
               {t("common.today")}
             </button>
           )}
+        </div>
+        <div className="w-32">
+          <Select aria-label={t("shortStays.calendar.days")} value={String(dayCount)} onChange={(e) => setDayCount(Number(e.target.value))} options={[14, 30, 60].map((count) => ({ value: String(count), label: t("shortStays.calendar.dayCount", { count }) }))} />
         </div>
         <output className="tnum pb-1.5 text-[13.5px] text-ink-2" aria-live="polite">
           {t("shortStays.calendar.range", { start: formatDate(from), end: formatDate(to) })}
@@ -281,58 +296,63 @@ export function CalendarTab({
         </div>
       )}
       {calendar.data && rows.length > 0 && (
-        <div className="card overflow-x-auto">
-          <div className="relative" style={{ width: LABEL_W + CALENDAR_DAYS * DAY_W }}>
-            {/* Weekend and today shading behind every row. */}
-            <div aria-hidden className="pointer-events-none absolute bottom-0 top-0" style={{ left: LABEL_W, width: CALENDAR_DAYS * DAY_W }}>
-              {days.map((d, i) => {
-                const we = weekday(d) === 0 || weekday(d) === 6;
-                if (!we && d !== today) return null;
-                return <div key={d} className="absolute bottom-0 top-0" style={{ left: i * DAY_W, width: DAY_W, background: d === today ? "color-mix(in oklab, var(--color-brass) 12%, transparent)" : "rgba(245,244,240,0.025)", borderLeft: d === today ? "1px solid color-mix(in oklab, var(--color-brass) 60%, transparent)" : undefined }} />;
-              })}
-            </div>
-            {/* Header */}
-            <div className="hairline-b sticky top-0 z-20 flex bg-surface">
-              <div className="sticky left-0 z-10 flex items-end bg-surface px-3 pb-2" style={{ width: LABEL_W, minWidth: LABEL_W }}>
-                <span className="microlabel">{t("shortStays.calendar.spaceColumn")}</span>
+        <div className="card">
+          <p className="hairline-b px-3 py-2 text-[12px] text-ink-3">{t("shortStays.calendar.scrollHint")} {t("shortStays.calendar.keyboardHint")}</p>
+          <div className="overflow-x-auto">
+            <div className="relative" style={{ width: LABEL_W + dayCount * DAY_W }}>
+              {/* Weekend and today shading behind every row. */}
+              <div aria-hidden className="pointer-events-none absolute bottom-0 top-0" style={{ left: LABEL_W, width: dayCount * DAY_W }}>
+                {days.map((d, i) => {
+                  const we = weekday(d) === 0 || weekday(d) === 6;
+                  if (!we && d !== today) return null;
+                  return <div key={d} className="absolute bottom-0 top-0" style={{ left: i * DAY_W, width: DAY_W, background: d === today ? "color-mix(in oklab, var(--color-brass) 12%, transparent)" : "rgba(245,244,240,0.025)", borderLeft: d === today ? "1px solid color-mix(in oklab, var(--color-brass) 60%, transparent)" : undefined }} />;
+                })}
               </div>
-              {days.map((d, i) => {
-                const dayNum = Number(d.slice(8, 10));
-                const showMonth = i === 0 || dayNum === 1;
-                return (
-                  <div key={d} className={`relative flex flex-col items-center pb-1.5 pt-5 ${d === today ? "text-brass-bright" : "text-ink-3"}`} style={{ width: DAY_W, minWidth: DAY_W }}>
-                    {showMonth && <span className="absolute left-1 top-1 whitespace-nowrap text-[11px] font-semibold text-ink-2">{t(`months.short.${d.slice(5, 7)}` as MessageKey)}</span>}
-                    <span className="text-[10.5px] uppercase">{t(`shortStays.calendar.weekdayShort.${weekday(d)}` as MessageKey)}</span>
-                    <span className={`tnum text-[13px] ${d === today ? "font-bold" : "font-medium text-ink-2"}`}>{dayNum}</span>
-                  </div>
-                );
-              })}
+              {/* Header */}
+              <div className="hairline-b sticky top-0 z-20 flex bg-surface">
+                <div className="sticky left-0 z-10 flex items-end bg-surface px-3 pb-2" style={{ width: LABEL_W, minWidth: LABEL_W }}>
+                  <span className="microlabel">{t("shortStays.calendar.spaceColumn")}</span>
+                </div>
+                {days.map((d, i) => {
+                  const dayNum = Number(d.slice(8, 10));
+                  const showMonth = i === 0 || dayNum === 1;
+                  return (
+                    <div key={d} className={`relative flex flex-col items-center pb-1.5 pt-5 ${d === today ? "text-brass-bright" : "text-ink-3"}`} style={{ width: DAY_W, minWidth: DAY_W }}>
+                      {showMonth && <span className="absolute left-1 top-1 whitespace-nowrap text-[11px] font-semibold text-ink-2">{t(`months.short.${d.slice(5, 7)}` as MessageKey)}</span>}
+                      <span className="text-[10.5px] uppercase">{t(`shortStays.calendar.weekdayShort.${weekday(d)}` as MessageKey)}</span>
+                      <span className={`tnum text-[13px] ${d === today ? "font-bold" : "font-medium text-ink-2"}`}>{dayNum}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              {/* Rows */}
+              <ul>
+                {rows.map((row, rowIndex) => {
+                  const placed = layout(row.items);
+                  const lanes = Math.max(1, ...placed.map((p) => p.lane + 1));
+                  const height = Math.max(78, lanes * LANE_H + 8);
+                  return (
+                    <li key={row.spaceId} className="hairline-b flex last:border-b-0" style={{ height }}>
+                      <div className="sticky left-0 z-10 border-r border-[var(--hairline)] bg-surface" style={{ width: LABEL_W, minWidth: LABEL_W }}>
+                        <RowLabel row={row} />
+                      </div>
+                      <div
+                        className="relative"
+                        style={{ width: dayCount * DAY_W, backgroundImage: `repeating-linear-gradient(to right, transparent 0 ${DAY_W - 1}px, var(--hairline) ${DAY_W - 1}px ${DAY_W}px)` }}
+                      >
+                        {days.map((date, dayIndex) => {
+                          const key = `${row.spaceId}:${date}`;
+                          return <button key={date} type="button" ref={(el) => { if (el) dayButtons.current.set(key, el); else dayButtons.current.delete(key); }} className="absolute inset-y-0 cursor-cell hover:bg-surface-3/30 focus-visible:z-20 focus-visible:outline-offset-[-3px]" style={{ left: dayIndex * DAY_W, width: DAY_W }} tabIndex={activeDay === key ? 0 : -1} aria-label={t("shortStays.calendar.dayAction", { date: formatDate(date), space: row.spacePath })} onFocus={() => setFocusedDay(key)} onKeyDown={(e) => moveDay(e, rowIndex, dayIndex)} onClick={() => openDay(row, date)} />;
+                        })}
+                        {placed.map(({ item, lane }) => (
+                          <Bar key={`${item.kind}-${item.id}-${item.start}`} item={item} lane={lane} from={from} days={dayCount} onBlock={(id) => onBlock(id)} />
+                        ))}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
             </div>
-            {/* Rows */}
-            <ul>
-              {rows.map((row) => {
-                const items = row.items.filter((it) => showCancelled || it.status !== "cancelled");
-                const placed = layout(items);
-                const lanes = Math.max(1, ...placed.map((p) => p.lane + 1));
-                const height = Math.max(78, lanes * LANE_H + 8);
-                return (
-                  <li key={row.spaceId} className="hairline-b flex last:border-b-0" style={{ height }}>
-                    <div className="sticky left-0 z-10 border-r border-[var(--hairline)] bg-surface" style={{ width: LABEL_W, minWidth: LABEL_W }}>
-                      <RowLabel row={row} />
-                    </div>
-                    <div
-                      className="relative cursor-cell"
-                      style={{ width: CALENDAR_DAYS * DAY_W, backgroundImage: `repeating-linear-gradient(to right, transparent 0 ${DAY_W - 1}px, var(--hairline) ${DAY_W - 1}px ${DAY_W}px)` }}
-                      onClick={(e) => onTrackClick(e, row)}
-                    >
-                      {placed.map(({ item, lane }) => (
-                        <Bar key={`${item.kind}-${item.id}-${item.start}`} item={item} lane={lane} from={from} days={CALENDAR_DAYS} onBlock={(id) => onBlock(id)} />
-                      ))}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
           </div>
         </div>
       )}

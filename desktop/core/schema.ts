@@ -761,6 +761,7 @@ export interface Migration {
 export const MIGRATIONS: readonly Migration[] = [
   { version: 1, name: "initial local schema", sql: MIGRATION_1 },
   { version: 2, name: "short stays: channel connections, reservations history, blocks, turnovers, ledger", sql: MIGRATION_2 },
+  { version: 3, name: "safe channel sync diagnostics", sql: "ALTER TABLE channel_sync_runs ADD COLUMN diagnostic TEXT;" },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -86,7 +86,12 @@ function Inventory({ property }: { property: PropertyDetail }) {
     >
       {archive.error && (
         <div className="mb-3">
-          <Notice tone="critical">{archive.error}</Notice>
+          <Notice tone="critical">
+            {archive.error}
+            {archive.messageKey === "shortStays.connections.spaceHasConnection" && (
+              <div className="mt-2"><LinkButton size="sm" href="/settings/channels/">{t("shortStays.actions.connections")}</LinkButton></div>
+            )}
+          </Notice>
         </div>
       )}
       {property.units.length === 0 ? (

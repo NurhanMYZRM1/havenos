@@ -51,7 +51,11 @@ per-platform recompiles. The cost is a larger download.
   permission requests denied, single-instance lock.
 - **No dev server in installed builds.** `app://havenos` serves `out/` from the
   app bundle (inside `app.asar`). `npm run desktop:dev` is the only mode that
-  uses `next dev`.
+  uses `next dev`. With `HAVENOS_DEV_SERVER_URL` set in an unpackaged app, main
+  clears only the session's HTTP cache before its first navigation. This
+  prevents old web-mode permanent redirects from looping against Next's
+  trailing-slash redirects. Packaged builds ignore that variable and never
+  clear the cache; records, attachments and backups are unaffected.
 
 ## Local storage
 
@@ -120,7 +124,12 @@ Restore works in stages:
 - **Maintenance** keeps a history row for every create, field change, note and
   attachment added or removed.
 - **Sample workspace** is a separate database, so demo records can never mix
-  with real ones. It is never included in backups.
+  with real ones. It is never included in backups. Opening it on a new Kuala
+  Lumpur day recreates its fictional records and resets sample edits; edits
+  persist when reopened on the same day. The seed date comes from
+  `core.today()`, including the development-only `HAVENOS_FAKE_NOW` clock.
+  Relative sync-time labels read the same clock through the lightweight
+  `app.now` IPC method.
 
 ## Short stays (Airbnb)
 
@@ -147,14 +156,37 @@ Full details, including what syncs and what doesn't:
   in one transaction, so a failure changes nothing. Imports are idempotent. A
   booking that vanishes is flagged, never auto-cancelled. A clashing booking is
   held as a conflict, never overwritten. A feed that suddenly loses most of its
-  bookings is rejected.
+  bookings, or at least three future bookings, is rejected until explicitly
+  accepted. Recurrence rules are rejected with a visible unsupported message;
+  they are never silently ignored. Conflict details are recomputed on read
+  through `findConflicts`, so a repaired clash is immediately reflected.
+- **Space archiving.** A non-removed channel connection (including a paused
+  one) prevents archiving its space or a containing/contained space. The UI
+  links to Channel connections to move or remove it first.
+- **Diagnostics.** Failed sync runs retain a bounded, sanitized exception name
+  and message in `channel_sync_runs.diagnostic`, visible under Recent syncs.
+  URLs, query strings and secret values are stripped before storage or logging;
+  raw errors and stacks are not persisted there.
 - **History.** `reservation_events` records every change, whether made by
   hand, by sync or by CSV import. Turnovers follow their stay.
 - **Money.** `stay_ledger` keeps *imported* (Airbnb CSV, idempotent on
-  `external_ref`) and *entered* figures apart.
+  `external_ref`) and *entered* figures apart. Import identity excludes payout
+  dates: a changed date updates the existing entry and keeps the previous date
+  in its description. Old date-based references are matched and upgraded on
+  reimport. Adjustments have their own performance figure and affect estimated
+  net once, without inflating booking value or payouts. CSV preview warnings
+  cross IPC as translation keys and parameters.
+- **Calendar and turnovers.** `blocks.get` resolves block links directly.
+  `stays.calendar` includes both boundary dates and hides cancelled
+  reservations unless `includeCancelled` is true; each item's occupied nights
+  remain `[start, endExclusive)`. Turnover reads use a single windowed arrival
+  timeline per space, including containing/contained spaces, instead of a
+  correlated next-arrival query per turnover.
 - **Schema 2** rebuilds `reservations` and `attachments` (turnover photos) and
   keeps every existing row. The usual pre-upgrade copy is taken first. Backups
-  from schema 1 restore and migrate as before.
+  from schema 1 restore and migrate as before. **Schema 3** only appends the
+  nullable `channel_sync_runs.diagnostic` column. Schema 1 and 2 data and backups
+  migrate to it without dropping rows; migrations 1 and 2 are unchanged.
 
 ## Language
 

@@ -484,6 +484,7 @@ function Runs({ d }: { d: ChannelConnectionDetail }) {
                   <td>
                     <span className={r.outcome === "ok" ? "text-good" : r.outcome === null ? "text-info" : "text-[#ff9d95]"}>{t(`shortStays.enums.syncOutcome.${r.outcome ?? "running"}` as MessageKey)}</span>
                     {r.errorCode && <div className="text-[12px] text-ink-3">{r.errorCode}</div>}
+                    {r.diagnostic && <p className="mt-1 max-w-64 whitespace-normal break-words text-[12px] text-ink-2">{r.diagnostic}</p>}
                   </td>
                   <td className="tnum">{r.outcome ? t("shortStays.detail.runFound", { n: r.eventsSeen }) : "—"}</td>
                   <td className="tnum text-[12.5px] text-ink-2">{r.outcome ? t("shortStays.detail.runChanges", { created: r.created, updated: r.updated, missing: r.missing, conflicts: r.conflicts }) : "—"}</td>

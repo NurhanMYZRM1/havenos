@@ -385,7 +385,7 @@ export const en = {
   },
 
   sample: {
-    banner: "You're looking at the sample workspace. Everything here is fictional and kept apart from your records.",
+    banner: "You're looking at the sample workspace. Everything here is fictional and kept apart from your records. Sample edits reset when you open it on a new day.",
     leave: "Back to my records",
     reset: "Reset sample",
     open: "Open sample workspace",
@@ -977,7 +977,7 @@ export const en = {
     receiptNote: "Note printed on receipts",
     receiptNoteHint: "Optional, e.g. bank account details for future payments.",
     saved: "Settings saved",
-    sampleHelp: "A separate workspace with fictional properties, tenants and payments, for trying HavenOS out. It never mixes with your records and isn't included in backups.",
+    sampleHelp: "A separate workspace with fictional properties, tenants, payments and short stays, for trying HavenOS out. It refreshes on a new Kuala Lumpur day when opened, resetting sample edits. It never mixes with your records and isn't included in backups.",
     sampleOpen: "Open sample workspace",
     sampleReset: "Reset and open sample workspace",
     sampleActive: "The sample workspace is open.",

@@ -104,8 +104,8 @@ describe("Airbnb transactions export", () => {
     assert.equal(parsed.rowsSkipped, 5);
     assert.equal(parsed.rows.length, 8);
     assert.equal(parsed.currency, "MYR");
-    assert.ok(parsed.warnings.some((w) => w.includes("5 payout transfer rows")));
-    assert.ok(parsed.warnings.some((w) => w.includes("RM 20.00")), "Airbnb-remitted tourism tax is explained, not counted");
+    assert.ok(parsed.warnings.some((w) => w.key === "shortStays.import.warn.payoutRows" && w.params?.n === 5));
+    assert.ok(parsed.warnings.some((w) => w.key === "shortStays.import.warn.remittedTax" && w.params?.amount === "RM 20.00"), "Airbnb-remitted tourism tax is explained, not counted");
   });
 
   it("reproduces the README control totals per listing", () => {
@@ -145,6 +145,23 @@ describe("Airbnb transactions export", () => {
     assert.deepEqual(p.rows[0].money.map((m) => [m.kind, m.amountSen]), [["booking_value", 51000], ["channel_fee", 1530], ["payout", 49470]]);
   });
 
+  it("keeps keys when payout dates move while distinguishing repeated lines in one export", () => {
+    const header = "Date,Type,Confirmation code,Start date,End date,Listing,Currency,Amount,Reference";
+    const line = "10/10/2026,Resolution Adjustment,HMAAAA1111,,,Studio,MYR,-20.00,REF1";
+    const before = parseAirbnbCsv(`${header}\n${line}`, TODAY);
+    const after = parseAirbnbCsv(`${header}\n${line.replace("10/10/2026", "10/12/2026")}`, TODAY);
+    assert.equal(before.rows[0].money[0].externalRef, after.rows[0].money[0].externalRef);
+    assert.notEqual(before.rows[0].money[0].occurredOn, after.rows[0].money[0].occurredOn);
+    const repeated = parseAirbnbCsv(`${header}\n${line}\n${line}`, TODAY);
+    assert.notEqual(repeated.rows[0].money[0].externalRef, repeated.rows[1].money[0].externalRef);
+    const separate = parseAirbnbCsv(`${header}\n${line}\n${line.replace("REF1", "REF2")}`, TODAY);
+    assert.notEqual(separate.rows[0].money[0].externalRef, separate.rows[1].money[0].externalRef, "equal amounts with different references are separate transactions");
+    const dated = [line, line.replace("10/10/2026", "10/12/2026")];
+    const refsByDate = (lines: string[]) => parseAirbnbCsv([header, ...lines].join("\n"), TODAY).rows
+      .map((row) => [row.money[0].occurredOn, row.money[0].externalRef]).sort();
+    assert.deepEqual(refsByDate(dated), refsByDate(dated.toReversed()), "export order doesn't change keys");
+  });
+
   it("skips other currencies, unreadable dates and amounts with warnings; flags unknown types", () => {
     const text = [
       "Date,Type,Confirmation code,Start date,End date,Listing,Currency,Amount,Gross earnings,Service fee",
@@ -158,10 +175,10 @@ describe("Airbnb transactions export", () => {
     assert.deepEqual(p.rows.map((r) => r.code), ["HMAAAA4444", "HMAAAA5555"]);
     assert.equal(p.rowsSkipped, 3);
     assert.equal(p.currency, "MYR, USD");
-    assert.ok(p.warnings.some((w) => w.includes("1 rows in USD")));
-    assert.ok(p.warnings.some((w) => w.includes("Row 3") && w.includes("24/10/2026")));
-    assert.ok(p.warnings.some((w) => w.includes("Row 4") && w.includes("1.234")));
-    assert.ok(p.warnings.some((w) => w.includes("Co-Host Payout")));
+    assert.ok(p.warnings.some((w) => w.key === "shortStays.import.warn.otherCurrency" && w.params?.n === 1 && w.params?.currency === "USD"));
+    assert.ok(p.warnings.some((w) => w.key === "shortStays.import.warn.badDate" && w.params?.row === 3 && w.params?.value === "24/10/2026"));
+    assert.ok(p.warnings.some((w) => w.key === "shortStays.import.warn.badAmount" && w.params?.row === 4 && w.params?.value === "1.234"));
+    assert.ok(p.warnings.some((w) => w.key === "shortStays.import.warn.unknownType" && w.params?.type === "Co-Host Payout"));
     assert.deepEqual(p.rows[0].money.map((m) => [m.kind, m.amountSen]), [["adjustment", -2000]]);
   });
 
@@ -170,13 +187,25 @@ describe("Airbnb transactions export", () => {
     const upcoming = p.rows.filter((r) => r.upcoming);
     assert.ok(upcoming.length > 0);
     assert.ok(upcoming.every((r) => r.money.length === 0));
-    assert.ok(p.warnings.some((w) => w.includes("hasn't released")));
+    assert.ok(p.warnings.some((w) => w.key === "shortStays.import.warn.upcoming"));
   });
 
   it("rejects other files", () => {
-    assert.throws(() => parseAirbnbCsv("Name,Phone\nA,1", TODAY), (e: unknown) => e instanceof AppError && e.messageKey === "errors.money.notAirbnbCsv");
+    assert.throws(() => parseAirbnbCsv("Name,Phone\nA,1", TODAY), (e: unknown) => e instanceof AppError && e.messageKey === "errors.money.notAirbnbCsvHeaders" && e.params?.headers === "Name, Phone");
     assert.throws(() => parseAirbnbCsv("", TODAY), (e: unknown) => e instanceof AppError && e.messageKey === "errors.money.emptyCsv");
     assert.throws(() => parseAirbnbCsv("Date,Type,Amount\n", TODAY), (e: unknown) => e instanceof AppError && e.messageKey === "errors.money.emptyCsv");
+  });
+
+  it("reports unknown headers without including row data or recognised headers", () => {
+    assert.throws(
+      () => parseAirbnbCsv("Date,Transaction category,Net earnings,Listing\n10/10/2026,Reservation,123.45,Private guest details", TODAY),
+      (err: unknown) => {
+        assert.ok(err instanceof AppError);
+        assert.deepEqual(err.params, { headers: "Transaction category, Net earnings" });
+        assert.ok(!err.message.includes("Private guest details") && !err.message.includes("123.45"));
+        return true;
+      },
+    );
   });
 });
 
@@ -192,7 +221,7 @@ describe("Airbnb reservations export (legacy)", () => {
     assert.ok(parsed.rows.every((r) => r.money.length === 0));
     const kept = JSON.stringify(parsed);
     assert.ok(!kept.includes("7700") && !kept.includes("+60") && !kept.includes("5555"), "phone numbers are never kept");
-    assert.ok(parsed.warnings.some((w) => w.includes("Transaction history")));
+    assert.ok(parsed.warnings.some((w) => w.key === "shortStays.import.warn.noMoneyInReservations"));
   });
 
   it("drops rows broken by an unquoted comma", () => {

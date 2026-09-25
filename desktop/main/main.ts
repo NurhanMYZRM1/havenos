@@ -8,6 +8,7 @@ import { toErrorShape } from "../core/errors";
 import { createHandlers, type Handlers, type Platform } from "../core/handlers";
 import { HttpFeedFetcher } from "../core/channels/fetcher";
 import { ChannelScheduler } from "../core/channels/scheduler";
+import { safeSyncDiagnostic } from "../core/channels/diagnostics";
 import { Workspaces } from "../core/workspace";
 import { electronImages } from "./images";
 import { SafeStorageChannelSecrets } from "./channel-secrets";
@@ -15,7 +16,7 @@ import { buildMenu } from "./menu";
 import { APP_ORIGIN, registerProtocols, registerSchemes } from "./protocols";
 import { SafeStorageSecrets } from "./secrets";
 
-const DEV_URL = process.env.HAVENOS_DEV_SERVER_URL?.replace(/\/+$/, "") || null;
+const DEV_URL = !app.isPackaged ? process.env.HAVENOS_DEV_SERVER_URL?.replace(/\/+$/, "") || null : null;
 const START_URL = DEV_URL ?? APP_ORIGIN;
 
 // A stable data folder that survives app upgrades and renames:
@@ -189,7 +190,7 @@ function registerIpc(handlers: Handlers) {
       return { ok: true, data };
     } catch (err) {
       const shape = toErrorShape(err);
-      if (shape.code === "INTERNAL") console.error(`[havenos] ${method} failed:`, err);
+      if (shape.code === "INTERNAL") console.error(`[havenos] ${method} failed:`, safeSyncDiagnostic(err));
       return { ok: false, error: shape };
     }
   });
@@ -237,6 +238,9 @@ async function main() {
     openExternal: (url) => shell.openExternal(url),
   });
   hardenSession();
+  // An old web-mode permanent redirect can oppose Next's trailing-slash
+  // redirect. Clear only dev HTTP cache, before the first navigation.
+  if (DEV_URL) await session.defaultSession.clearCache();
   registerProtocols(path.join(app.getAppPath(), "out"), workspaces);
   // Calendar feeds: read shortly after launch, then every 20 minutes while open. Links live in the OS credential store.
   const channels = new ChannelScheduler({

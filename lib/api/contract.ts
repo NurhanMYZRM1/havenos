@@ -39,7 +39,7 @@ import type {
   TurnoverStatus,
 } from "../domain/enums";
 import type { Sen } from "../domain/money";
-import type { MessageKey } from "../i18n";
+import type { MessageKey, MessageParams } from "../i18n";
 
 export type ID = string;
 
@@ -769,6 +769,7 @@ export type ChannelErrorCode =
   | "forbidden"
   | "rate_limited"
   | "not_a_calendar"
+  | "unsupported_recurrence"
   | "too_large"
   | "feed_shrank"
   | "feed_link_missing"
@@ -815,6 +816,8 @@ export interface ChannelSyncRun {
   finishedAt: string | null;
   outcome: "ok" | "failed" | "rejected" | null;
   errorCode: ChannelErrorCode | null;
+  /** Error name and message with calendar links, query strings and secrets removed. */
+  diagnostic: string | null;
   eventsSeen: number;
   created: number;
   updated: number;
@@ -1153,6 +1156,11 @@ export interface LedgerEntry extends LedgerInput {
 
 export type StayImportKind = "airbnb_transactions" | "airbnb_reservations";
 
+export interface CsvImportWarning {
+  key: MessageKey;
+  params?: MessageParams;
+}
+
 export interface CsvImportPreview {
   token: ID;
   kind: StayImportKind;
@@ -1167,7 +1175,7 @@ export interface CsvImportPreview {
   matchedReservations: number;
   newReservations: number;
   currency: string | null;
-  warnings: string[];
+  warnings: CsvImportWarning[];
 }
 
 export interface CsvImportResult {
@@ -1203,8 +1211,9 @@ export interface PerformanceRow {
   channelFees: PerformanceFigure;
   taxes: PerformanceFigure;
   payouts: PerformanceFigure;
+  adjustments: PerformanceFigure;
   expenses: PerformanceFigure;
-  /** bookingValue − channelFees − taxes − expenses. An estimate, not accounting. */
+  /** bookingValue + adjustments − channelFees − taxes − expenses. An estimate, not accounting. */
   estimatedNetSen: Sen;
   /** Booking value ÷ nights, for stays with a booking value. */
   averageNightlySen: Sen | null;
@@ -1224,6 +1233,8 @@ export interface PerformanceReport {
 
 export interface ApiSpec {
   "app.info": [void, AppInfo];
+  /** Current workspace clock as milliseconds since the Unix epoch (honours HAVENOS_FAKE_NOW). */
+  "app.now": [void, number];
   "app.openDataFolder": [void, null];
   "app.openExternal": [{ url: string }, null];
   "workspace.switch": [{ workspace: Workspace; reset?: boolean }, AppInfo];
@@ -1331,6 +1342,7 @@ export interface ApiSpec {
   "reservations.cancel": [{ id: ID; reason: string }, ReservationDetail];
 
   "blocks.list": [{ from: IsoDate; to: IsoDate; propertyId: ID | null; includeCancelled: boolean }, AvailabilityBlock[]];
+  "blocks.get": [{ id: ID }, AvailabilityBlock];
   "blocks.create": [AvailabilityBlockInput, AvailabilityBlock];
   "blocks.update": [AvailabilityBlockInput & { id: ID }, AvailabilityBlock];
   "blocks.cancel": [{ id: ID }, AvailabilityBlock];
@@ -1340,7 +1352,8 @@ export interface ApiSpec {
   "turnovers.update": [TurnoverUpdate, TurnoverDetail];
 
   "stays.day": [{ date: IsoDate }, StayDay];
-  "stays.calendar": [{ from: IsoDate; to: IsoDate; propertyId: ID | null }, StayCalendar];
+  /** Includes both from and to. Cancelled reservations are hidden unless includeCancelled is true. */
+  "stays.calendar": [{ from: IsoDate; to: IsoDate; propertyId: ID | null; includeCancelled?: boolean }, StayCalendar];
   "stays.alerts": [void, StayAlert[]];
   "stays.performance": [{ from: YearMonth; to: YearMonth; groupBy: PerformanceGroup; propertyId: ID | null }, PerformanceReport];
 

@@ -63,6 +63,7 @@ export interface Mutation<M extends ApiMethod> {
   fields: Record<string, MessageKey>;
   /** Error code of the last failure (e.g. "CONFLICT"), null otherwise. */
   code: ErrorCode | null;
+  messageKey: MessageKey | null;
   reset: () => void;
 }
 
@@ -76,6 +77,7 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
   const [error, setError] = useState<string | null>(null);
   const [fields, setFields] = useState<Record<string, MessageKey>>({});
   const [code, setCode] = useState<ErrorCode | null>(null);
+  const [messageKey, setMessageKey] = useState<MessageKey | null>(null);
 
   const run = useCallback(
     async (params: ApiParams<M>) => {
@@ -83,6 +85,7 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
       setError(null);
       setFields({});
       setCode(null);
+      setMessageKey(null);
       try {
         const call = api as unknown as (m: M, p: unknown) => Promise<ApiResult<M>>;
         const result = await call(method, params);
@@ -92,6 +95,7 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
         setError(errorMessage(err));
         if (err instanceof ApiError && err.fields) setFields(err.fields);
         setCode(err instanceof ApiError ? err.code : "INTERNAL");
+        setMessageKey(err instanceof ApiError ? err.messageKey ?? null : null);
         return undefined;
       } finally {
         setPending(false);
@@ -104,9 +108,10 @@ export function useMutation<M extends ApiMethod>(method: M): Mutation<M> {
     setError(null);
     setFields({});
     setCode(null);
+    setMessageKey(null);
   }, []);
 
-  return { run, pending, error, fields, code, reset };
+  return { run, pending, error, fields, code, messageKey, reset };
 }
 
 // ── Calendar sync activity ────────────────────────────────────────────────

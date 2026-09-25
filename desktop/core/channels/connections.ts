@@ -17,7 +17,8 @@ import type { Core } from "../context";
 import { AppError, notFound, validationError } from "../errors";
 import type { ChannelSecretStore, ChannelSyncControl } from "../integrations/channels";
 import { feedAdapter } from "../integrations/registry";
-import { moveReservationSpace } from "../services/reservations";
+import { conflictInfo, findConflicts, stayRange } from "../services/availability";
+import { moveReservationSpace, type ReservationRow } from "../services/reservations";
 import { allSpacePaths, isLettable, newId, spacePath, type SpaceRow } from "../services/shared";
 import { pendingBlocks } from "./pending";
 
@@ -320,6 +321,7 @@ interface RunRow {
   finished_at: string | null;
   outcome: ChannelSyncRun["outcome"];
   error_code: string | null;
+  diagnostic: string | null;
   events_seen: number;
   created_count: number;
   updated_count: number;
@@ -355,9 +357,20 @@ export function parseConflicts(raw: string | null): ConflictInfo[] {
 }
 
 export function toEventView(core: Core, e: ChannelEventRow, connectionName: string): ChannelEventView {
+  const conn = getConnectionRow(core, e.connection_id);
   const res = e.reservation_id
-    ? core.db.get<{ check_in: string; check_out: string; status: string }>("SELECT check_in, check_out, status FROM reservations WHERE id = ?", [e.reservation_id])
-    : undefined;
+    ? core.db.get<ReservationRow>("SELECT * FROM reservations WHERE id = ?", [e.reservation_id])
+    : core.db.get<ReservationRow>("SELECT * FROM reservations WHERE channel = ? AND channel_reservation_id = ?", [conn.channel, e.confirmation_code ?? e.external_uid]);
+  const ours = res?.connection_id === conn.id;
+  const adoptable = res?.space_id === conn.space_id && (!res.connection_id || !findConnectionRow(core, res.connection_id));
+  const [first, last] = stayRange(e.start_date, e.end_date);
+  const spaceId = res && ours && res.status !== "cancelled" ? res.space_id : conn.space_id;
+  const conflicts = findConflicts(core, spaceId, first, last, { excludeReservationId: res && (ours || adoptable) ? res.id : null }).map((c) => conflictInfo(core, c));
+  // A booking reference owned by another listing still needs review even when its dates don't overlap.
+  if (res && !ours && !adoptable && !conflicts.some((c) => c.kind === "reservation" && c.id === res.id)) {
+    const [start, end] = stayRange(res.check_in, res.check_out);
+    conflicts.push(conflictInfo(core, { kind: "reservation", id: res.id, spaceId: res.space_id, who: res.guest_name, start, end, channel: res.channel }));
+  }
   return {
     id: e.id,
     connectionId: e.connection_id,
@@ -372,7 +385,7 @@ export function toEventView(core: Core, e: ChannelEventRow, connectionName: stri
       res && res.status !== "cancelled" && (res.check_in !== e.start_date || res.check_out !== e.end_date)
         ? { checkIn: res.check_in, checkOut: res.check_out }
         : null,
-    conflicts: parseConflicts(e.conflict),
+    conflicts,
     firstSeenAt: e.first_seen_at,
     lastSeenAt: e.last_seen_at,
   };
@@ -448,6 +461,7 @@ export function getConnectionDetail(core: Core, ctx: ConnectionViewContext, id: 
         finishedAt: r.finished_at,
         outcome: r.outcome,
         errorCode: r.error_code as ChannelErrorCode | null,
+        diagnostic: r.diagnostic,
         eventsSeen: r.events_seen,
         created: r.created_count,
         updated: r.updated_count,

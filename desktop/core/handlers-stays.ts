@@ -1,6 +1,6 @@
 import type { HandlerContext, Handlers } from "./handler-utils";
 import { idParam, ok, text } from "./handler-utils";
-import { cancelBlock, createBlock, listBlocks, updateBlock } from "./services/blocks";
+import { cancelBlock, createBlock, getBlock, listBlocks, updateBlock } from "./services/blocks";
 import { stayAlerts } from "./services/stay-alerts";
 import type { ChannelRuntime } from "./services/stay-channels";
 import {
@@ -26,6 +26,7 @@ type StayMethods =
   | "reservations.update"
   | "reservations.cancel"
   | "blocks.list"
+  | "blocks.get"
   | "blocks.create"
   | "blocks.update"
   | "blocks.cancel"
@@ -67,6 +68,7 @@ export function stayHandlers(ctx: HandlerContext): Pick<Handlers, StayMethods> {
     "reservations.cancel": (p) => cancelManualReservation(core(), idParam(p), text(p, "reason", 500)),
 
     "blocks.list": (p) => listBlocks(core(), ok(validateBlockList(p))),
+    "blocks.get": (p) => getBlock(core(), idParam(p)),
     "blocks.create": (p) => createBlock(core(), ok(validateBlockInput(p))),
     "blocks.update": (p) => updateBlock(core(), ok(validateBlockUpdate(p))),
     "blocks.cancel": (p) => cancelBlock(core(), idParam(p)),

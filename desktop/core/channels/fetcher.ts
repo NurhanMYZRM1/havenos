@@ -1,11 +1,12 @@
 import { ChannelSyncError, type FeedFetcher } from "../integrations/channels";
+import { safeSyncDiagnostic } from "./diagnostics";
 
 /**
  * Reads a calendar feed over HTTPS from the main process.
  *
  * The link is a secret (Airbnb's `s=` token grants read access to the
  * calendar), so nothing here ever logs it or puts it in an error: failures
- * become a ChannelSyncError code with, at most, an HTTP status as detail.
+ * become a ChannelSyncError code with sanitized diagnostics.
  */
 
 export const FEED_TIMEOUT_MS = 30_000;
@@ -32,14 +33,15 @@ function errorCode(err: unknown): string {
   return "";
 }
 
-/** Map a thrown network error to a code. Never reads the error's message (it may name the host or path). */
-function networkError(err: unknown, timedOut: boolean): ChannelSyncError {
+/** Map a thrown network error to a code and a diagnostic with all link secrets removed. */
+function networkError(err: unknown, timedOut: boolean, url: string): ChannelSyncError {
   if (err instanceof ChannelSyncError) return err;
-  if (timedOut) return new ChannelSyncError("timeout");
+  const diagnostic = safeSyncDiagnostic(err, url);
+  if (timedOut) return new ChannelSyncError("timeout", "", diagnostic);
   const code = errorCode(err);
-  if (TIMEOUT_CODES.has(code)) return new ChannelSyncError("timeout");
-  if (/^(ERR_TLS|CERT_|UNABLE_TO_VERIFY|DEPTH_ZERO|SELF_SIGNED|ERR_SSL)/.test(code)) return new ChannelSyncError("http_error", "tls");
-  return new ChannelSyncError("offline");
+  if (TIMEOUT_CODES.has(code)) return new ChannelSyncError("timeout", "", diagnostic);
+  if (/^(ERR_TLS|CERT_|UNABLE_TO_VERIFY|DEPTH_ZERO|SELF_SIGNED|ERR_SSL)/.test(code)) return new ChannelSyncError("http_error", "tls", diagnostic);
+  return new ChannelSyncError("offline", "", diagnostic);
 }
 
 export interface HttpFeedFetcherOptions {
@@ -83,7 +85,7 @@ export class HttpFeedFetcher implements FeedFetcher {
             headers: { Accept: "text/calendar", "User-Agent": this.userAgent },
           });
         } catch (err) {
-          throw networkError(err, timedOut);
+          throw networkError(err, timedOut, current);
         }
         if (res.status >= 300 && res.status < 400 && res.status !== 304) {
           const location = res.headers.get("location");
@@ -105,7 +107,7 @@ export class HttpFeedFetcher implements FeedFetcher {
           await res.body?.cancel().catch(() => undefined);
           throw new ChannelSyncError("too_large");
         }
-        const body = await this.readBody(res, opts.maxBytes, controller, () => timedOut);
+        const body = await this.readBody(res, opts.maxBytes, controller, () => timedOut, current);
         return { status: res.status, body };
       }
     } finally {
@@ -113,7 +115,7 @@ export class HttpFeedFetcher implements FeedFetcher {
     }
   }
 
-  private async readBody(res: Response, maxBytes: number, controller: AbortController, timedOut: () => boolean): Promise<string> {
+  private async readBody(res: Response, maxBytes: number, controller: AbortController, timedOut: () => boolean, url: string): Promise<string> {
     if (!res.body) return "";
     const reader = res.body.getReader();
     const chunks: Uint8Array[] = [];
@@ -130,7 +132,7 @@ export class HttpFeedFetcher implements FeedFetcher {
         chunks.push(value);
       }
     } catch (err) {
-      throw networkError(err, timedOut());
+      throw networkError(err, timedOut(), url);
     }
     return new TextDecoder("utf-8").decode(Buffer.concat(chunks));
   }

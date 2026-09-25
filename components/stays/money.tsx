@@ -393,7 +393,7 @@ export function CsvImportDialog({ open, onClose }: { open: boolean; onClose: () 
                 <h3 className="mb-1.5 text-[13px] font-semibold">{t("shortStays.import.warnings")}</h3>
                 <ul className="list-disc space-y-1 pl-5 text-[13px] text-warn">
                   {preview.warnings.map((w, i) => (
-                    <li key={i}>{w}</li>
+                    <li key={i}>{t(w.key, w.params)}</li>
                   ))}
                 </ul>
               </div>
@@ -464,4 +464,3 @@ export function CsvImportDialog({ open, onClose }: { open: boolean; onClose: () 
 export function rangesLabel(n: number) {
   return plural(n, "shortStays.pending.countOne", "shortStays.pending.countMany");
 }
-
