@@ -60,6 +60,9 @@
   "overrides": {
     "next": {
       "postcss": "8.5.28"
+    },
+    "xcode": {
+      "uuid": "^11.1.1"
     }
   },
   "main": "dist-desktop/desktop/main/main.js",
