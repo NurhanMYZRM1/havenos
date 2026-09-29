@@ -5,7 +5,7 @@
   "compilerOptions": {
     "target": "ES2023",
     "module": "commonjs",
-    "moduleResolution": "node",
+    "moduleResolution": "bundler",
     "lib": ["ES2023"],
     "types": ["node"],
     "strict": true,

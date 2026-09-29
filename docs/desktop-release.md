@@ -19,6 +19,10 @@
 | `npm run test:cloud-functions` | Server-side entitlement / Stripe / cloud-function tests |
 | `npm run test:e2e` | Builds, then drives the real Electron app with Playwright |
 | `npm run typecheck` | TypeScript for the UI and for the desktop process |
+| `npm run lint` | ESLint (Next.js rules: React, hooks, accessibility, TypeScript) |
+
+Every push and pull request runs these checks, plus all three builds, on GitHub
+(`.github/workflows/ci.yml`).
 
 Tests use temporary data folders; they never touch your real data.
 `HAVENOS_DATA_DIR=/some/folder` points any run at a different data folder.

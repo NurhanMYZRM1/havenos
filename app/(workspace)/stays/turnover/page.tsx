@@ -98,7 +98,6 @@ function DetailsForm({ tv }: { tv: TurnoverDetail }) {
   useEffect(() => {
     setF({ status: tv.status, assigneeName: tv.assigneeName, assigneePhone: tv.assigneePhone ? formatPhone(tv.assigneePhone) : "", checkoutTime: tv.checkoutTime, cost: senText(tv.costSen), notes: tv.notes });
     // Only when the saved values change, so ticking the checklist keeps unsaved edits here.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tv.id, tv.status, tv.assigneeName, tv.assigneePhone, tv.checkoutTime, tv.costSen, tv.notes]);
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF((x) => ({ ...x, [k]: v }));
 

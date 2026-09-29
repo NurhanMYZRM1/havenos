@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint .",
     "typecheck": "tsc --noEmit && tsc -p desktop/tsconfig.json --noEmit",
     "desktop:dev": "node scripts/desktop.mjs dev",
     "desktop:build": "node scripts/desktop.mjs build",
@@ -39,10 +39,10 @@
     "@capacitor/splash-screen": "^8.0.2",
     "@capacitor/status-bar": "^8.0.3",
     "@capgo/capacitor-native-biometric": "^8.6.7",
-    "@supabase/ssr": "^0.6.1",
+    "@supabase/ssr": "^0.12.7",
     "@supabase/supabase-js": "^2.49.0",
-    "framer-motion": "^12.4.0",
-    "next": "^15.5.0",
+    "framer-motion": "^13.4.4",
+    "next": "^16.3.6",
     "react": "^19.1.0",
     "react-dom": "^19.1.0"
   },
@@ -53,9 +53,11 @@
     "@types/react-dom": "^19.0.0",
     "electron": "^44.4.5",
     "electron-builder": "^26.15.3",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.6",
     "playwright-core": "^1.63.0",
     "tailwindcss": "^4.1.0",
-    "typescript": "^5.7.0"
+    "typescript": "~6.0"
   },
   "overrides": {
     "next": {

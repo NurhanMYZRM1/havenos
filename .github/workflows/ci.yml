@@ -1,0 +1,47 @@
+# Automatic checks: GitHub runs this on every push and pull request.
+# A red ✗ on a commit means one of these steps failed; open the run to see which.
+name: CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  # Fast checks: security audit, types, lint, unit tests, and every build target.
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      # Unit tests and builds don't launch Electron, so skip its large download.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # Fails on a known high or critical vulnerability in the npm dependencies.
+      - run: npm audit --audit-level=high
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run test:cloud-functions
+      - name: Build web (Vercel)
+        run: npm run build
+      - name: Build desktop (Electron main + static renderer)
+        run: node scripts/desktop.mjs build
+      - name: Build mobile (Capacitor static export)
+        run: npm run build:mobile
+
+  # End-to-end: launches the real desktop app in a virtual display and drives it.
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: xvfb-run -a npm run test:e2e
