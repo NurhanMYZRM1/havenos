@@ -121,6 +121,9 @@ export function useNow(intervalMs = 30_000): number {
     const id = window.setInterval(reload, intervalMs);
     return () => window.clearInterval(id);
   }, [intervalMs, reload]);
+  // Until the app clock answers, fall back to the device clock on every render
+  // (the interval above keeps re-rendering, so relative times never freeze).
+  // eslint-disable-next-line react-hooks/purity
   return data ?? Date.now();
 }
 
