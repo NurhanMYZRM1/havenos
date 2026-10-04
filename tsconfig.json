@@ -42,6 +42,7 @@
     "supabase/functions",
     "out",
     ".next",
-    "release"
+    "release",
+    "mobile"
   ]
 }
