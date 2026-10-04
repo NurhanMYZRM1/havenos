@@ -18,6 +18,8 @@ const eslintConfig = [
       "ios/**",
       "next-env.d.ts",
       "lib/database.types.ts",
+      // The Expo app has its own toolchain (cd mobile && npm run typecheck).
+      "mobile/**",
     ],
   },
   {

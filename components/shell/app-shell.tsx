@@ -21,7 +21,7 @@ interface Actions {
   openSearch: () => void;
 }
 
-const ActionsContext = createContext<Actions>({ recordPayment: () => undefined, newMaintenance: () => undefined, openSearch: () => undefined });
+export const ActionsContext = createContext<Actions>({ recordPayment: () => undefined, newMaintenance: () => undefined, openSearch: () => undefined });
 
 /** Open the app-wide dialogs (record payment, new maintenance request, search). */
 export function useActions() {

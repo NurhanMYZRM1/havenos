@@ -1,0 +1,91 @@
+/* The desktop app's design tokens and components, unchanged (inlined by postcss.config.mjs). */
+@import "tailwindcss";
+@import "../../../app/globals.css";
+
+/* Tailwind scans the shared screens for class names. */
+@source "../../../app";
+@source "../../../components";
+@source "../../../lib";
+
+/* next/font isn't available here: use Apple's own faces (New York, SF Pro). */
+:root {
+  --font-fraunces: ui-serif, "New York";
+  --font-inter: -apple-system, system-ui;
+}
+
+html,
+body {
+  background: var(--color-bg);
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+/* Narrow screens: let grid/flex children shrink so truncated text truncates
+   instead of widening the column past the phone's edge. */
+.mobile-page .grid > *,
+.mobile-page .flex > .flex-1 {
+  min-width: 0;
+}
+
+/* Desktop tables scroll sideways inside their card until each screen is redesigned natively. */
+.mobile-page :has(> table.table) {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.mobile-page table.table td {
+  white-space: nowrap;
+}
+
+/* WebKit gives date fields an intrinsic width wider than a phone column. */
+input[type="date"],
+input[type="month"],
+input[type="time"],
+input[type="datetime-local"] {
+  -webkit-appearance: none;
+  appearance: none;
+  min-width: 0;
+  max-width: 100%;
+  display: block;
+  text-align: left;
+}
+input::-webkit-date-and-time-value {
+  text-align: left;
+}
+
+/* The native navigation bar already shows the title and back button. */
+.mobile-page > header:first-child h1 {
+  display: none;
+}
+.mobile-page > header:first-child > div > a[href]:first-child {
+  display: none;
+}
+
+/* A desktop dialog shown as a native modal sheet: fill the sheet. */
+html.sheet,
+html.sheet body {
+  background: var(--color-surface);
+}
+html.sheet dialog.modal {
+  margin: 0;
+  width: 100%;
+  max-width: 100%;
+  height: 100%;
+  max-height: none;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 0;
+  padding: 0;
+  background: transparent;
+}
+html.sheet dialog.modal::backdrop {
+  background: transparent;
+}
+html.sheet dialog.modal > .card {
+  width: 100% !important;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+html.sheet dialog.modal .overflow-y-auto {
+  max-height: none;
+}

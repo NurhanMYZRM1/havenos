@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useRef, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useSyncExternalStore, type FormEvent, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { t } from "@/lib/i18n";
 import { Button } from "./button";
 import { FormError } from "./field";
 import { Icon } from "./icons";
+
+const noSubscription = () => () => undefined;
 
 /**
  * Modal dialog built on the native <dialog> element: focus is trapped and
@@ -32,6 +35,9 @@ export function Modal({
   onSubmit?: () => void;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  // Rendered into <body> so a dialog opened from inside another dialog's form
+  // (e.g. confirming a photo removal while creating a request) isn't a nested form.
+  const host = useSyncExternalStore(noSubscription, () => document.body, () => null);
 
   useEffect(() => {
     const el = ref.current;
@@ -43,7 +49,7 @@ export function Modal({
       first?.focus();
     }
     if (!open && el.open) el.close();
-  }, [open]);
+  }, [open, host]);
 
   const body = (
     <>
@@ -61,7 +67,8 @@ export function Modal({
     </>
   );
 
-  return (
+  if (!host) return null;
+  return createPortal(
     <dialog
       ref={ref}
       className="modal m-auto"
@@ -79,6 +86,8 @@ export function Modal({
             noValidate
             onSubmit={(e: FormEvent) => {
               e.preventDefault();
+              // React submit events bubble through portals to an enclosing dialog's form.
+              e.stopPropagation();
               onSubmit();
             }}
           >
@@ -88,7 +97,8 @@ export function Modal({
           body
         )}
       </div>
-    </dialog>
+    </dialog>,
+    host,
   );
 }
 

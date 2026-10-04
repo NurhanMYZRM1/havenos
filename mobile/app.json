@@ -1,0 +1,58 @@
+{
+  "expo": {
+    "name": "HavenOS",
+    "slug": "havenos",
+    "version": "0.2.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "havenos",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#0b0b0d",
+    "ios": {
+      "bundleIdentifier": "co.havenos.operations",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "android": {
+      "package": "co.havenos.operations",
+      "adaptiveIcon": {
+        "backgroundColor": "#0b0b0d",
+        "foregroundImage": "./assets/icon-foreground.png",
+        "backgroundImage": "./assets/icon-background.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#0b0b0d",
+          "image": "./assets/icon.png",
+          "imageWidth": 96
+        }
+      ],
+      "expo-sqlite",
+      "expo-secure-store",
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "HavenOS uses Face ID to lock your property records."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "HavenOS attaches photos you choose to properties, tenancies and maintenance requests.",
+          "cameraPermission": "HavenOS takes photos for maintenance requests, turnovers and property records."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true,
+      "tsconfigPaths": false
+    }
+  }
+}

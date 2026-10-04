@@ -1,0 +1,30 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "paths": {
+      "~/*": [
+        "./src/*"
+      ],
+      "@/*": [
+        "../*"
+      ],
+      "next/link": [
+        "./src/dom/shims/next-link.tsx"
+      ],
+      "next/navigation": [
+        "./src/dom/shims/next-navigation.ts"
+      ],
+      "*": [
+        "./node_modules/@types/*",
+        "./node_modules/*"
+      ]
+    }
+  },
+  "include": [
+    "src/**/*.ts",
+    "src/**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
+}
