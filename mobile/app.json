@@ -2,6 +2,7 @@
   "expo": {
     "name": "HavenOS",
     "slug": "havenos",
+    "owner": "squadralennox",
     "version": "0.2.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -53,6 +54,9 @@
     "experiments": {
       "typedRoutes": true,
       "tsconfigPaths": false
+    },
+    "runtimeVersion": {
+      "policy": "fingerprint"
     }
   }
 }
